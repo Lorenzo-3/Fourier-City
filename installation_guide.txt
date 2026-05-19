@@ -1,0 +1,26 @@
+# Download and install nvm:
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.4/install.sh | bash
+
+# in lieu of restarting the shell
+\. "$HOME/.nvm/nvm.sh"
+
+# Download and install Node.js:
+nvm install 24
+
+# Verify the Node.js version:
+node -v # Should print "v24.15.0".
+
+# Verify npm version:
+npm -v # Should print "11.12.1".
+
+# three.js
+npm install --save three
+
+# vite
+npm install --save-dev vite
+
+# run
+npx vite 
+
+# If everything went well, you'll see a URL like http://localhost:5173 
+# appear in your terminal, and can open that URL to see your web application.
