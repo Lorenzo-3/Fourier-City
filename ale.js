@@ -86,6 +86,7 @@ let waveformData = null;
 let newsong = true;
 let song = 'sounds/ijustthrewouthelovefmydreams.mp3';
 let isLoading = false; // Prevent multiple loading requests at once
+let soundReady = false; // Track if sound is fully loaded
 let currentWaveformMesh = null; // Track current waveform mesh for cleanup
 
 // Global shader material - created once, reused for all waveforms (avoids recompilation)
@@ -130,6 +131,7 @@ const waveformMaterial = new THREE.ShaderMaterial({
 function loadsong(song) {
     if (isLoading) return; // Block if already loading
     isLoading = true;
+    soundReady = false; // Mark sound as not ready while loading
 
     audioLoader.load(song, function(buffer) {
         // Clean up old geometry from GPU memory
@@ -188,6 +190,7 @@ function loadsong(song) {
             scene.add(sound);
         }
 
+        soundReady = true; // Sound is now ready to play
         isLoading = false; // Loading complete
     }, null, function(err) {
         console.error("Audio Load Error:", err);
@@ -196,9 +199,32 @@ function loadsong(song) {
 }
 
 
+// Toggle pause/resume for audio
+function togglePauseResume() {
+    if (!stopbutton.userData.clicked) {
+        stopbutton.userData.clicked = true;
+        // Pause immediately
+        if (waveformData && waveformData.soundStarted) {
+            waveformData.sound.pause();
+            const currentTime = listener.context.currentTime;
+            waveformData.pausedElapsed = currentTime - waveformData.startTime;
+            waveformData.soundStarted = false;
+        }
+    } else {
+        stopbutton.userData.clicked = false;
+        // Resume immediately
+        if (waveformData && waveformData.sound) {
+            waveformData.sound.play();
+            waveformData.startTime = listener.context.currentTime - waveformData.pausedElapsed;
+            waveformData.soundStarted = true;
+        }
+    }
+}
+
 // Creating a clickable buttons
 const raycaster = new THREE.Raycaster();
 const mouseClick = new THREE.Vector2();
+const clickableObjects = []; // Only raycasts against clickable objects for performance
 
 window.addEventListener('click', (event) => {
 
@@ -210,7 +236,7 @@ window.addEventListener('click', (event) => {
     raycaster.setFromCamera(mouseClick, camera);
 
     // Calculate objects intersecting the picking ray
-    const intersects = raycaster.intersectObjects(scene.children, true);
+    const intersects = raycaster.intersectObjects(clickableObjects);
     
     // Find first clickable object
     let clickedObject = null;
@@ -223,39 +249,32 @@ window.addEventListener('click', (event) => {
 
     if (clickedObject) {
         console.log('Clicked object:', clickedObject.userData.name);
-        if (clickedObject.userData.name === 'SelectMusic') {
+        if (clickedObject.userData.name === 'Stop/Resume') {
+            togglePauseResume();
+        }
+        else if (clickedObject.userData.name === 'SelectMusic') {
             // Open file dialog to select music file
-        }else if (!clickedObject.userData.clicked) {
-            // Change to  wave or music sound
+        } else if (!clickedObject.userData.clicked) {
+            // Change to wave or music sound
+            // Stop current sound if playing
+            if (waveformData && waveformData.sound && waveformData.soundStarted) {
+                waveformData.sound.stop();
+                waveformData.soundStarted = false;
+            }
+            // Set to play state (not paused)
+            stopbutton.userData.clicked = false;
+            // Load new song
             newsong = true;
             song = clickedObject.userData.mp3file;
-            }
         }
+    }
 });
 
 // Space key to pause/resume
 window.addEventListener('keydown', (event) => {
     if (event.code === 'Space') {
         event.preventDefault(); // Prevent page scroll
-        
-        if (!stopbutton.userData.clicked) {
-            stopbutton.userData.clicked = true;
-            // Pause immediately
-            if (waveformData && waveformData.soundStarted) {
-                waveformData.sound.pause();
-                const currentTime = listener.context.currentTime;
-                waveformData.pausedElapsed = currentTime - waveformData.startTime;
-                waveformData.soundStarted = false;
-            }
-        } else {
-            stopbutton.userData.clicked = false;
-            // Resume immediately
-            if (waveformData && waveformData.sound) {
-                waveformData.sound.play();
-                waveformData.startTime = listener.context.currentTime - waveformData.pausedElapsed;
-                waveformData.soundStarted = true;
-            }
-        }
+        togglePauseResume();
     }
 });
 
@@ -268,7 +287,9 @@ const stopbutton = new THREE.Mesh(stopbuttonGeometry, stopbuttonMaterial);
 stopbutton.position.set(0, 1.3, 0.1);
 stopbutton.userData.name = 'Stop/Resume'; // Mark as clickable
 stopbutton.userData.clicked = false; // Track click state (if clicked music stops, if clicked again music resumes)
+stopbutton.userData.type = 'clickable';
 scene.add(stopbutton);
+clickableObjects.push(stopbutton);
 
 // Sine, Square, Triangle, Saw Waves buttons
 const sinebuttonGeometry = new THREE.CylinderGeometry(0.1, 0.1, 0.1);
@@ -280,6 +301,7 @@ sinebutton.userData.name = 'Sine'; // Mark as clickable
 sinebutton.userData.clicked = false; // Track click state
 sinebutton.userData.mp3file = 'sounds/sine_wave.mp3'; // Store associated mp3 file
 scene.add(sinebutton);
+clickableObjects.push(sinebutton);
 
 const squarebuttonGeometry = new THREE.CylinderGeometry(0.1, 0.1, 0.1);
 const squarebuttonMaterial = new THREE.MeshPhongMaterial({ color: 0x00ff00 });
@@ -290,6 +312,7 @@ squarebutton.userData.name = 'Square'; // Mark as clickable
 squarebutton.userData.clicked = false; // Track click state
 squarebutton.userData.mp3file = 'sounds/square_wave.mp3'; // Store associated mp3 file
 scene.add(squarebutton);
+clickableObjects.push(squarebutton);
 
 const trianglebuttonGeometry = new THREE.CylinderGeometry(0.1, 0.1, 0.1);
 const trianglebuttonMaterial = new THREE.MeshPhongMaterial({ color: 0x00ff00 });
@@ -300,6 +323,7 @@ trianglebutton.userData.name = 'Triangle'; // Mark as clickable
 trianglebutton.userData.clicked = false; // Track click state
 trianglebutton.userData.mp3file = 'sounds/triangle_wave.mp3'; // Store associated mp3 file
 scene.add(trianglebutton);
+clickableObjects.push(trianglebutton);
 
 const sawbuttonGeometry = new THREE.CylinderGeometry(0.1, 0.1, 0.1);
 const sawbuttonMaterial = new THREE.MeshPhongMaterial({ color: 0x00ff00 });
@@ -310,6 +334,7 @@ sawbutton.userData.name = 'Saw'; // Mark as clickable
 sawbutton.userData.clicked = false; // Track click state
 sawbutton.userData.mp3file = 'sounds/saw_wave.mp3'; // Store associated mp3 file
 scene.add(sawbutton);
+clickableObjects.push(sawbutton);
 
 const musicbuttonGeometry = new THREE.BoxGeometry(0.8, 0.1, 0.1, 4, 4, 4);
 const musicbuttonMaterial = new THREE.MeshPhongMaterial({ color: 0x0000ff });
@@ -317,9 +342,10 @@ const musicbutton = new THREE.Mesh(musicbuttonGeometry, musicbuttonMaterial);
 musicbutton.position.set(0, 1.3, 0.5);
 musicbutton.userData.type = 'clickable'; // Mark as clickable
 musicbutton.userData.name = 'Music'; // Mark as clickable
-musicbutton.userData.clicked = true; // Track click state
+musicbutton.userData.clicked = false; // Track click state
 musicbutton.userData.mp3file = 'sounds/ijustthrewouthelovefmydreams.mp3'; // Store associated mp3 file
 scene.add(musicbutton);
+clickableObjects.push(musicbutton);
 
 const selectmusicbuttonGeometry = new THREE.CylinderGeometry(0.05, 0.05, 0.05);
 const selectmusicbuttonMaterial = new THREE.MeshPhongMaterial({ color: 0xffff00 });
@@ -328,6 +354,7 @@ selectmusicbutton.position.set(0.5, 1.3, 0.5);
 selectmusicbutton.userData.type = 'clickable'; // Mark as clickable
 selectmusicbutton.userData.name = 'SelectMusic'; // Mark as clickable
 scene.add(selectmusicbutton);
+clickableObjects.push(selectmusicbutton);
 
 
 // Pitch, Lowcut, Midcut, Highcut, Lowcut Sliders
@@ -341,7 +368,7 @@ function playmusic() {
     }
 
     // Auto-play when song is loaded and not yet started
-    if (waveformData && !waveformData.soundStarted && !stopbutton.userData.clicked) {
+    if (soundReady && waveformData && !waveformData.soundStarted && !stopbutton.userData.clicked) {
         waveformData.sound.play();
         waveformData.startTime = listener.context.currentTime;
         waveformData.soundStarted = true;
