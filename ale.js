@@ -212,27 +212,12 @@ window.addEventListener('click', (event) => {
     // Calculate objects intersecting the picking ray
     const intersects = raycaster.intersectObjects(scene.children, true);
     
-    // Define cylindrical range around table
-    const tableCenter = new THREE.Vector3(0, 0, 0);
-    const cylinderRadius = 2.0; // Horizontal distance from table center
-    const cylinderMinY = 0.8; // Bottom of cylinder
-    const cylinderMaxY = 2.0; // Top of cylinder
-    
-    // Find first clickable object within cylindrical range
+    // Find first clickable object
     let clickedObject = null;
     for (let intersection of intersects) {
         if (intersection.object.userData.type === 'clickable') {
-            const point = intersection.point;
-            // Calculate horizontal distance from table center (XZ plane)
-            const horizontalDistance = Math.sqrt(point.x * point.x + point.z * point.z);
-            
-            // Check if within cylinder bounds
-            if (horizontalDistance <= cylinderRadius && 
-                point.y >= cylinderMinY && 
-                point.y <= cylinderMaxY) {
-                clickedObject = intersection.object;
-                break; // Stop at first match
-            }
+            clickedObject = intersection.object;
+            break; // Stop at first match
         }
     }
 
@@ -366,6 +351,14 @@ function playmusic() {
     if (waveformData && waveformData.soundStarted && !stopbutton.userData.clicked) {
         const currentTime = listener.context.currentTime;
         const elapsed = currentTime - waveformData.startTime;
+        
+        // Auto-resume when music finishes
+        if (elapsed >= waveformData.duration) {
+            waveformData.sound.stop();
+            waveformData.sound.play();
+            waveformData.startTime = listener.context.currentTime;
+        }
+        
         const progressRatio = elapsed / waveformData.duration;
         const offset = progressRatio * waveformData.totalWidth;
         waveformData.line.position.x = -offset;
@@ -373,9 +366,6 @@ function playmusic() {
         waveformData.line.material.uniforms.linePositionX.value = waveformData.line.position.x;
     }
 };
-
-renderer.render( scene, camera );
-
 
 function animate() {
     requestAnimationFrame( animate );
