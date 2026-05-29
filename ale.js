@@ -92,6 +92,38 @@ scene.add(glassBox);
 
 const loader = new OBJLoader();
 
+// Create text texture from canvas
+function createTextTexture(text, size = 256) {
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d');
+    
+    // Transparent background
+    ctx.clearRect(0, 0, size, size);
+    
+    // Text
+    ctx.fillStyle = 'white';
+    ctx.font = 'bold 60px Arial';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(text, size / 2, size / 2);
+    
+    const texture = new THREE.CanvasTexture(canvas);
+    return texture;
+}
+
+// Create sprite above button
+function createTextSprite(text, position) {
+    const texture = createTextTexture(text);
+    const material = new THREE.SpriteMaterial({ map: texture });
+    const sprite = new THREE.Sprite(material);
+    sprite.position.copy(position);
+    sprite.position.y += 0.1; // Height above button
+    sprite.scale.set(0.3, 0.3, 1);
+    return sprite;
+}
+
 let tableObject;
 loader.load('models/table.obj', (object) => {
     const blackMaterial = new THREE.MeshPhongMaterial({ color: 0x000000 });
@@ -269,6 +301,20 @@ const raycaster = new THREE.Raycaster();
 const mouseClick = new THREE.Vector2();
 const clickableObjects = []; // Only raycasts against clickable objects for performance
 let currentPlayingButton = null; // Track which song button is currently playing
+let currentFilterButton = null; // Track which filter is currently selected
+const buttonPositions = {}; // Store original button positions for animation
+
+// Animate button press (stays down on click, pops up on second click)
+function animateClick(button) {
+    if (!buttonPositions[button.userData.name]) {
+        buttonPositions[button.userData.name] = button.position.y;
+    }
+    // Toggle pressed state
+    button.userData.pressed = !button.userData.pressed;
+    button.userData.isAnimating = true;
+    button.userData.animationStart = Date.now();
+    button.userData.originalY = buttonPositions[button.userData.name];
+}
 
 window.addEventListener('click', (event) => {
 
@@ -293,14 +339,37 @@ window.addEventListener('click', (event) => {
 
     if (clickedObject) {
         console.log('Clicked object:', clickedObject.userData.name);
+        
         if (clickedObject.userData.name === 'Stop/Resume') {
+            animateClick(clickedObject);
             togglePauseResume();
         }
         else if (clickedObject.userData.name === 'SelectMusic') {
             // Open file dialog to select music file
             fileInput.click();
             
-        } 
+        }
+        else if (clickedObject.userData.band) {
+            // Handle filter button logic (mutually exclusive)
+            if (currentFilterButton === clickedObject) {
+                // Toggle off if clicking same filter
+                animateClick(clickedObject);
+                currentFilterButton = null;
+            } else {
+                // Switch to new filter
+                if (currentFilterButton) {
+                    // Reset previous filter button
+                    currentFilterButton.userData.pressed = false;
+                    currentFilterButton.userData.isAnimating = false;
+                    if (buttonPositions[currentFilterButton.userData.name]) {
+                        currentFilterButton.position.y = buttonPositions[currentFilterButton.userData.name];
+                    }
+                }
+                // Set new filter as current
+                currentFilterButton = clickedObject;
+                animateClick(clickedObject);
+            }
+        }
         else if (clickedObject !== currentPlayingButton) {
             // Only switch song if it's a different button
             // Stop current sound if playing
@@ -308,12 +377,22 @@ window.addEventListener('click', (event) => {
                 waveformData.sound.stop();
                 waveformData.soundStarted = false;
             }
+            // Reset previous button animation
+            if (currentPlayingButton) {
+                currentPlayingButton.userData.pressed = false;
+                currentPlayingButton.userData.isAnimating = false;
+                if (buttonPositions[currentPlayingButton.userData.name]) {
+                    currentPlayingButton.position.y = buttonPositions[currentPlayingButton.userData.name];
+                }
+            }
             // Set to play state (not paused)
             stopbutton.userData.clicked = false;
             // Load new song
             newsong = true;
             song = clickedObject.userData.mp3file;
             currentPlayingButton = clickedObject; // Track current playing button
+            // Animate button press
+            animateClick(clickedObject);
         }
     }
 });
@@ -322,6 +401,7 @@ window.addEventListener('click', (event) => {
 window.addEventListener('keydown', (event) => {
     if (event.code === 'Space') {
         event.preventDefault(); // Prevent page scroll
+        animateClick(stopbutton);
         togglePauseResume();
     }
 });
@@ -332,150 +412,170 @@ window.addEventListener('keydown', (event) => {
 const stopbuttonGeometry = new THREE.CylinderGeometry(0.2, 0.2, 0.1);
 const stopbuttonMaterial = new THREE.MeshPhongMaterial({ color: 0xff0000 });
 const stopbutton = new THREE.Mesh(stopbuttonGeometry, stopbuttonMaterial);
-stopbutton.position.set(0, 1.3, 0.05);
+stopbutton.position.set(0, 1.28, 0.05);
 stopbutton.userData.name = 'Stop/Resume'; // Mark as clickable
 stopbutton.userData.clicked = false; // Track click state (if clicked music stops, if clicked again music resumes)
 stopbutton.userData.type = 'clickable';
 scene.add(stopbutton);
 clickableObjects.push(stopbutton);
+scene.add(createTextSprite('STOP', stopbutton.position));
 
 // Sine, Square, Triangle, Saw, Noise, Rich Waves buttons
 const sinebuttonGeometry = new THREE.CylinderGeometry(0.1, 0.1, 0.1);
 const sinebuttonMaterial = new THREE.MeshPhongMaterial({ color: 0x00ff00 });
 const sinebutton = new THREE.Mesh(sinebuttonGeometry, sinebuttonMaterial);
-sinebutton.position.set(-0.9, 1.3, 0.05);
+sinebutton.position.set(-0.9, 1.28, 0.05);
 sinebutton.userData.type = 'clickable'; // Mark as clickable
 sinebutton.userData.name = 'Sine'; // Mark as clickable
 sinebutton.userData.clicked = false; // Track click state
 sinebutton.userData.mp3file = 'sounds/sine_wave.mp3'; // Store associated mp3 file
 scene.add(sinebutton);
 clickableObjects.push(sinebutton);
+scene.add(createTextSprite('SINE', sinebutton.position));
 
 const squarebuttonGeometry = new THREE.CylinderGeometry(0.1, 0.1, 0.1);
 const squarebuttonMaterial = new THREE.MeshPhongMaterial({ color: 0x00ff00 });
 const squarebutton = new THREE.Mesh(squarebuttonGeometry, squarebuttonMaterial);
-squarebutton.position.set(-0.5, 1.3, 0.05);
+squarebutton.position.set(-0.5, 1.28, 0.05);
 squarebutton.userData.type = 'clickable'; // Mark as clickable
 squarebutton.userData.name = 'Square'; // Mark as clickable
 squarebutton.userData.clicked = false; // Track click state
 squarebutton.userData.mp3file = 'sounds/square_wave.mp3'; // Store associated mp3 file
 scene.add(squarebutton);
 clickableObjects.push(squarebutton);
+scene.add(createTextSprite('SQUARE', squarebutton.position));
 
 const trianglebuttonGeometry = new THREE.CylinderGeometry(0.1, 0.1, 0.1);
 const trianglebuttonMaterial = new THREE.MeshPhongMaterial({ color: 0x00ff00 });
 const trianglebutton = new THREE.Mesh(trianglebuttonGeometry, trianglebuttonMaterial);
-trianglebutton.position.set(0.5, 1.3, 0.05);
+trianglebutton.position.set(0.5, 1.28, 0.05);
 trianglebutton.userData.type = 'clickable'; // Mark as clickable
 trianglebutton.userData.name = 'Triangle'; // Mark as clickable
 trianglebutton.userData.clicked = false; // Track click state
 trianglebutton.userData.mp3file = 'sounds/triangle_wave.mp3'; // Store associated mp3 file
 scene.add(trianglebutton);
 clickableObjects.push(trianglebutton);
+scene.add(createTextSprite('TRIANGLE', trianglebutton.position));
 
 const sawbuttonGeometry = new THREE.CylinderGeometry(0.1, 0.1, 0.1);
 const sawbuttonMaterial = new THREE.MeshPhongMaterial({ color: 0x00ff00 });
 const sawbutton = new THREE.Mesh(sawbuttonGeometry, sawbuttonMaterial);
-sawbutton.position.set(0.9, 1.3, 0.05);
+sawbutton.position.set(0.9, 1.28, 0.05);
 sawbutton.userData.type = 'clickable'; // Mark as clickable
 sawbutton.userData.name = 'Saw'; // Mark as clickable
 sawbutton.userData.clicked = false; // Track click state
 sawbutton.userData.mp3file = 'sounds/saw_wave.mp3'; // Store associated mp3 file
 scene.add(sawbutton);
 clickableObjects.push(sawbutton);
+scene.add(createTextSprite('SAW', sawbutton.position));
 
 const noisebuttonGeometry = new THREE.CylinderGeometry(0.1, 0.1, 0.1);
 const noisebuttonMaterial = new THREE.MeshPhongMaterial({ color: 0x00ff00 });
 const noisebutton = new THREE.Mesh(noisebuttonGeometry, noisebuttonMaterial);
-noisebutton.position.set(0.7, 1.3, 0.35);
+noisebutton.position.set(-0.7, 1.28, 0.35);
 noisebutton.userData.type = 'clickable'; // Mark as clickable
 noisebutton.userData.name = 'Noise'; // Mark as clickable
 noisebutton.userData.clicked = false; // Track click state
 noisebutton.userData.mp3file = 'sounds/noise_wave.mp3'; // Store associated mp3 file
 scene.add(noisebutton);
 clickableObjects.push(noisebutton);
+scene.add(createTextSprite('NOISE', noisebutton.position));
 
 const richbuttonGeometry = new THREE.CylinderGeometry(0.1, 0.1, 0.1);
 const richbuttonMaterial = new THREE.MeshPhongMaterial({ color: 0x00ff00 });
 const richbutton = new THREE.Mesh(richbuttonGeometry, richbuttonMaterial);
-richbutton.position.set(-0.7, 1.3, 0.35);
+richbutton.position.set(0.7, 1.28, 0.35);
 richbutton.userData.type = 'clickable'; // Mark as clickable
 richbutton.userData.name = 'Rich'; // Mark as clickable
 richbutton.userData.clicked = false; // Track click state
 richbutton.userData.mp3file = 'sounds/rich_wave.mp3'; // Store associated mp3 file
 scene.add(richbutton);
 clickableObjects.push(richbutton);
+scene.add(createTextSprite('RICH', richbutton.position));
 
 const musicbuttonGeometry = new THREE.BoxGeometry(0.8, 0.1, 0.1, 4, 4, 4);
 const musicbuttonMaterial = new THREE.MeshPhongMaterial({ color: 0x0000ff });
 const musicbutton = new THREE.Mesh(musicbuttonGeometry, musicbuttonMaterial);
-musicbutton.position.set(-0.05, 1.3, 0.45);
+musicbutton.position.set(-0.05, 1.28, 0.45);
 musicbutton.userData.type = 'clickable'; // Mark as clickable
 musicbutton.userData.name = 'Music'; // Mark as clickable
 musicbutton.userData.clicked = false; // Track click state
 musicbutton.userData.mp3file = 'sounds/ijustthrewouthelovefmydreams.mp3'; // Store associated mp3 file
+musicbutton.userData.pressed = false; // Start unpressed
 scene.add(musicbutton);
 clickableObjects.push(musicbutton);
+scene.add(createTextSprite('MUSIC', musicbutton.position));
+
+// Initialize music button as starting selection
+buttonPositions['Music'] = musicbutton.position.y; // Store original position
+currentPlayingButton = musicbutton;
+song = musicbutton.userData.mp3file;
+newsong = true;
 
 const selectmusicbuttonGeometry = new THREE.CylinderGeometry(0.05, 0.05, 0.05);
 const selectmusicbuttonMaterial = new THREE.MeshPhongMaterial({ color: 0xffff00 });
 const selectmusicbutton = new THREE.Mesh(selectmusicbuttonGeometry, selectmusicbuttonMaterial);
-selectmusicbutton.position.set(0.45, 1.3, 0.45);
+selectmusicbutton.position.set(0.45, 1.28, 0.45);
 selectmusicbutton.userData.type = 'clickable'; // Mark as clickable
 selectmusicbutton.userData.name = 'SelectMusic'; // Mark as clickable
 scene.add(selectmusicbutton);
 clickableObjects.push(selectmusicbutton);
+scene.add(createTextSprite('SELECT', selectmusicbutton.position));
 
 // Lowpass, Highpass, Bandpass, Peaking buttons
 const lowpassbuttonGeometry = new THREE.CylinderGeometry(0.1, 0.1, 0.1);
 const lowpassbuttonMaterial = new THREE.MeshPhongMaterial({ color: 0xff00ff });
 const lowpassbutton = new THREE.Mesh(lowpassbuttonGeometry, lowpassbuttonMaterial);
-lowpassbutton.position.set(-0.45, 1.3, 0.75);
+lowpassbutton.position.set(-0.45, 1.28, 0.75);
 lowpassbutton.userData.type = 'clickable'; // Mark as clickable
 lowpassbutton.userData.band = true; // Mark as band control
 lowpassbutton.userData.name = 'Lowpass'; // Mark as clickable
 lowpassbutton.userData.clicked = false; // Track click state
 scene.add(lowpassbutton);
 clickableObjects.push(lowpassbutton);
+scene.add(createTextSprite('LOWP', lowpassbutton.position));
 
 const highpassbuttonGeometry = new THREE.CylinderGeometry(0.1, 0.1, 0.1);
 const highpassbuttonMaterial = new THREE.MeshPhongMaterial({ color: 0xff00ff });
 const highpassbutton = new THREE.Mesh(highpassbuttonGeometry, highpassbuttonMaterial);
-highpassbutton.position.set(-0.15, 1.3, 0.75);
+highpassbutton.position.set(-0.15, 1.28, 0.75);
 highpassbutton.userData.type = 'clickable'; // Mark as clickable
 highpassbutton.userData.band = true; // Mark as band control
 highpassbutton.userData.name = 'Highpass'; // Mark as clickable
 highpassbutton.userData.clicked = false; // Track click state
 scene.add(highpassbutton);
 clickableObjects.push(highpassbutton);
+scene.add(createTextSprite('HIGHP', highpassbutton.position));
 
 const bandpassbuttonGeometry = new THREE.CylinderGeometry(0.1, 0.1, 0.1);
 const bandpassbuttonMaterial = new THREE.MeshPhongMaterial({ color: 0xff00ff });
 const bandpassbutton = new THREE.Mesh(bandpassbuttonGeometry, bandpassbuttonMaterial);
-bandpassbutton.position.set(0.15, 1.3, 0.75);
+bandpassbutton.position.set(0.15, 1.28, 0.75);
 bandpassbutton.userData.type = 'clickable'; // Mark as clickable
 bandpassbutton.userData.band = true; // Mark as band control
 bandpassbutton.userData.name = 'Bandpass'; // Mark as clickable
 bandpassbutton.userData.clicked = false; // Track click state
 scene.add(bandpassbutton);
 clickableObjects.push(bandpassbutton);
+scene.add(createTextSprite('BANDP', bandpassbutton.position));
 
 const peakingbuttonGeometry = new THREE.CylinderGeometry(0.1, 0.1, 0.1);
 const peakingbuttonMaterial = new THREE.MeshPhongMaterial({ color: 0xff00ff });
 const peakingbutton = new THREE.Mesh(peakingbuttonGeometry, peakingbuttonMaterial);
-peakingbutton.position.set(0.45, 1.3, 0.75);
+peakingbutton.position.set(0.45, 1.28, 0.75);
 peakingbutton.userData.type = 'clickable'; // Mark as clickable
 peakingbutton.userData.band = true; // Mark as band control
 peakingbutton.userData.name = 'Peaking'; // Mark as clickable
 peakingbutton.userData.clicked = false; // Track click state
 scene.add(peakingbutton);
 clickableObjects.push(peakingbutton);
+scene.add(createTextSprite('PEAK', peakingbutton.position));
 
 // Pitch, Cutoff, Gain, Resonance, Sliders
 const pitchsliderGeometry = new THREE.CylinderGeometry(0.05, 0.05, 0.1);
 const pitchsliderMaterial = new THREE.MeshPhongMaterial({ color: 0xffc0cb});
 const pitchslider = new THREE.Mesh(pitchsliderGeometry, pitchsliderMaterial);
-pitchslider.position.set(0.0, 1.3, 1.3);
+pitchslider.position.set(0.0, 1.28, 1.3);
 pitchslider.userData.type = 'slidable'; // Mark as slidable
 pitchslider.userData.band = true; // Mark as band control
 scene.add(pitchslider);
@@ -484,7 +584,7 @@ clickableObjects.push(pitchslider);
 const cutoffsliderGeometry = new THREE.CylinderGeometry(0.05, 0.05, 0.1);
 const cutoffsliderMaterial = new THREE.MeshPhongMaterial({ color: 0x999999});
 const cutoffslider = new THREE.Mesh(cutoffsliderGeometry, cutoffsliderMaterial);
-cutoffslider.position.set(-0.3, 1.3, 1.05);
+cutoffslider.position.set(-0.3, 1.28, 1.05);
 cutoffslider.userData.type = 'slidable'; // Mark as slidable
 cutoffslider.userData.band = true; // Mark as band control
 scene.add(cutoffslider);
@@ -493,7 +593,7 @@ clickableObjects.push(cutoffslider);
 const gainsliderGeometry = new THREE.CylinderGeometry(0.05, 0.05, 0.1);
 const gainsliderMaterial = new THREE.MeshPhongMaterial({ color: 0x999999});
 const gainslider = new THREE.Mesh(gainsliderGeometry, gainsliderMaterial);
-gainslider.position.set(0.0, 1.3, 1.05);
+gainslider.position.set(0.0, 1.28, 1.05);
 gainslider.userData.type = 'slidable'; // Mark as slidable
 gainslider.userData.band = true; // Mark as band control
 scene.add(gainslider);
@@ -502,18 +602,11 @@ clickableObjects.push(gainslider);
 const resoncesliderGeometry = new THREE.CylinderGeometry(0.05, 0.05, 0.1);
 const resoncesliderMaterial = new THREE.MeshPhongMaterial({ color: 0x999999});
 const resonceslider = new THREE.Mesh(resoncesliderGeometry, resoncesliderMaterial);
-resonceslider.position.set(0.3, 1.3, 1.05);
+resonceslider.position.set(0.3, 1.28, 1.05);
 resonceslider.userData.type = 'slidable'; // Mark as slidable
 resonceslider.userData.band = true; // Mark as band control
 scene.add(resonceslider);
 clickableObjects.push(resonceslider);
-
-
-
-
-
-
-
 
 function playmusic() {
     if (newsong) {
@@ -527,6 +620,14 @@ function playmusic() {
         waveformData.sound.play();
         waveformData.startTime = listener.context.currentTime;
         waveformData.soundStarted = true;
+        
+        // Press music button when playback starts
+        if (currentPlayingButton && !currentPlayingButton.userData.pressed) {
+            currentPlayingButton.userData.pressed = true;
+            currentPlayingButton.userData.isAnimating = true;
+            currentPlayingButton.userData.animationStart = Date.now();
+            currentPlayingButton.userData.originalY = buttonPositions[currentPlayingButton.userData.name];
+        }
     }
     
     // Only handle waveform animation
@@ -539,6 +640,14 @@ function playmusic() {
             waveformData.sound.stop();
             waveformData.sound.play();
             waveformData.startTime = listener.context.currentTime;
+            
+            // Press button again on auto-repeat
+            if (currentPlayingButton && !currentPlayingButton.userData.pressed) {
+                currentPlayingButton.userData.pressed = true;
+                currentPlayingButton.userData.isAnimating = true;
+                currentPlayingButton.userData.animationStart = Date.now();
+                currentPlayingButton.userData.originalY = buttonPositions[currentPlayingButton.userData.name];
+            }
         }
         
         const progressRatio = elapsed / waveformData.duration;
@@ -549,9 +658,42 @@ function playmusic() {
     }
 };
 
+function clickanimation() {
+    clickableObjects.forEach(button => {
+        if (button.userData.isAnimating) {
+            const elapsed = Date.now() - button.userData.animationStart;
+            const duration = 150; // Animation duration
+            const progress = Math.min(elapsed / duration, 1);
+            
+            let movement = 0;
+            
+            if (button.userData.pressed) {
+                // Button pressed: move down smoothly
+                movement = progress * -0.08;
+            } else {
+                // Button released: move back up smoothly
+                movement = (1 - progress) * -0.08;
+            }
+            
+            button.position.y = button.userData.originalY + movement;
+            
+            if (progress >= 1) {
+                button.userData.isAnimating = false;
+            }
+        } else if (button.userData.pressed) {
+            // Keep button in pressed position if pressed but not animating
+            button.position.y = button.userData.originalY - 0.08;
+        } else if (button.userData.originalY !== undefined) {
+            // Keep button at original position if not pressed
+            button.position.y = button.userData.originalY;
+        }
+    });
+}
+
 function animate() {
     requestAnimationFrame( animate );
-    playmusic()
+    playmusic();
+    clickanimation();
 
     renderer.render( scene, camera );
 }
