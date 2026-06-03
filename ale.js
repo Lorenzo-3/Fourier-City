@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { PointerLockControls } from 'three/examples/jsm/controls/PointerLockControls.js';
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
 
 const renderer = new THREE.WebGLRenderer({ antialias: true } );
@@ -7,6 +7,31 @@ renderer.setSize( window.innerWidth, window.innerHeight );
 renderer.setPixelRatio( window.devicePixelRatio);
 renderer.setClearColor(0x000000); // Set background to black
 document.body.appendChild( renderer.domElement );
+
+const PLAYER_EYE_HEIGHT = 2.5;
+const PLAYER_RADIUS = 0.35;
+const WALK_SPEED = 3.8;
+const SPRINT_SPEED = 7.0;
+const WORLD_LIMIT = 48;
+
+renderer.domElement.style.display = 'block';
+
+const crosshair = document.createElement('div');
+crosshair.textContent = '+';
+Object.assign(crosshair.style, {
+    position: 'fixed',
+    left: '50%',
+    top: '50%',
+    transform: 'translate(-50%, -50%)',
+    color: '#ffffff',
+    font: '20px monospace',
+    lineHeight: '20px',
+    pointerEvents: 'none',
+    userSelect: 'none',
+    zIndex: '10',
+    display: 'none'
+});
+document.body.appendChild(crosshair);
 
 // Handle window resize
 window.addEventListener('resize', () => {
@@ -59,14 +84,49 @@ const camera = new THREE.PerspectiveCamera(
     1000 
 );
 
-camera.position.set(0, 5, 5);
+camera.position.set(0, PLAYER_EYE_HEIGHT, 5);
+camera.lookAt(0, 1.3, 0);
 
 // Audio listener
 const listener = new THREE.AudioListener();
 camera.add( listener );
 
-const orbit = new OrbitControls( camera, renderer.domElement );
-orbit.update();
+const controls = new PointerLockControls( camera, renderer.domElement );
+let lastFrameMs = performance.now();
+
+controls.addEventListener('lock', () => {
+    crosshair.style.display = 'block';
+});
+
+controls.addEventListener('unlock', () => {
+    crosshair.style.display = 'none';
+});
+
+const movementState = {
+    forward: false,
+    backward: false,
+    left: false,
+    right: false,
+    sprint: false
+};
+const playerMove = new THREE.Vector3();
+const playerForward = new THREE.Vector3();
+const playerRight = new THREE.Vector3();
+const candidatePosition = new THREE.Vector3();
+const axisCandidatePosition = new THREE.Vector3();
+let tableCollisionBox = null;
+
+function lockPointer() {
+    if (document.pointerLockElement === renderer.domElement) {
+        return;
+    }
+
+    const lockPromise = renderer.domElement.requestPointerLock?.();
+
+    if (lockPromise?.catch) {
+        lockPromise.catch(() => {});
+    }
+}
 
 const floorGeometry = new THREE.PlaneGeometry( 100, 100 );
 const floorMaterial = new THREE.MeshBasicMaterial( { color: 0x808080 } );
@@ -135,6 +195,9 @@ loader.load('models/table.obj', (object) => {
     object.position.set(0, 0, 0);
     scene.add(object);
     tableObject = object;
+    tableObject.updateMatrixWorld(true);
+    tableCollisionBox = new THREE.Box3().setFromObject(tableObject);
+    tableCollisionBox.expandByVector(new THREE.Vector3(PLAYER_RADIUS, 0, PLAYER_RADIUS));
 });
 
 let tablewireframeObject;
@@ -316,97 +379,138 @@ function animateClick(button) {
     button.userData.originalY = buttonPositions[button.userData.name];
 }
 
-window.addEventListener('click', (event) => {
+function getClickedObject(event) {
+    if (controls.isLocked) {
+        mouseClick.set(0, 0);
+    } else {
+        mouseClick.x = (event.clientX / window.innerWidth) * 2 - 1;
+        mouseClick.y = - (event.clientY / window.innerHeight) * 2 + 1;
+    }
 
-    // Calculate mouse position in normalized device coordinates
-    mouseClick.x = (event.clientX / window.innerWidth) * 2 - 1;
-    mouseClick.y = - (event.clientY / window.innerHeight) * 2 + 1;
-
-    // Update the raycaster with the camera and mouse position
     raycaster.setFromCamera(mouseClick, camera);
 
-    // Calculate objects intersecting the picking ray
     const intersects = raycaster.intersectObjects(clickableObjects);
-    
-    // Find first clickable object
-    let clickedObject = null;
+
     for (let intersection of intersects) {
         if (intersection.object.userData.type === 'clickable') {
-            clickedObject = intersection.object;
-            break; // Stop at first match
+            return intersection.object;
         }
     }
 
+    return null;
+}
+
+function handleClickedObject(clickedObject) {
+    console.log('Clicked object:', clickedObject.userData.name);
+
+    if (clickedObject.userData.name === 'Stop/Resume') {
+        animateClick(clickedObject);
+        togglePauseResume();
+    }
+    else if (clickedObject.userData.name === 'SelectMusic') {
+        if (controls.isLocked) {
+            controls.unlock();
+        }
+        fileInput.click();
+    }
+    else if (clickedObject.userData.band) {
+        // Handle filter button logic (mutually exclusive)
+        if (currentFilterButton === clickedObject) {
+            animateClick(clickedObject);
+            currentFilterButton = null;
+        } else {
+            if (currentFilterButton) {
+                currentFilterButton.userData.pressed = false;
+                currentFilterButton.userData.isAnimating = false;
+                if (buttonPositions[currentFilterButton.userData.name]) {
+                    currentFilterButton.position.y = buttonPositions[currentFilterButton.userData.name];
+                }
+            }
+            currentFilterButton = clickedObject;
+            animateClick(clickedObject);
+        }
+    }
+    else if (clickedObject !== currentPlayingButton) {
+        if (waveformData && waveformData.sound && waveformData.soundStarted) {
+            waveformData.sound.stop();
+            waveformData.soundStarted = false;
+        }
+        if (currentPlayingButton) {
+            currentPlayingButton.userData.pressed = false;
+            currentPlayingButton.userData.isAnimating = false;
+            if (buttonPositions[currentPlayingButton.userData.name]) {
+                currentPlayingButton.position.y = buttonPositions[currentPlayingButton.userData.name];
+            }
+        }
+        stopbutton.userData.clicked = false;
+        newsong = true;
+        song = clickedObject.userData.mp3file;
+        currentPlayingButton = clickedObject;
+        animateClick(clickedObject);
+    }
+}
+
+window.addEventListener('click', (event) => {
+    const clickedObject = getClickedObject(event);
+
     if (clickedObject) {
-        console.log('Clicked object:', clickedObject.userData.name);
-        
-        if (clickedObject.userData.name === 'Stop/Resume') {
-            animateClick(clickedObject);
-            togglePauseResume();
-        }
-        else if (clickedObject.userData.name === 'SelectMusic') {
-            // Open file dialog to select music file
-            fileInput.click();
-            
-        }
-        else if (clickedObject.userData.band) {
-            // Handle filter button logic (mutually exclusive)
-            if (currentFilterButton === clickedObject) {
-                // Toggle off if clicking same filter
-                animateClick(clickedObject);
-                currentFilterButton = null;
-            } else {
-                // Switch to new filter
-                if (currentFilterButton) {
-                    // Reset previous filter button
-                    currentFilterButton.userData.pressed = false;
-                    currentFilterButton.userData.isAnimating = false;
-                    if (buttonPositions[currentFilterButton.userData.name]) {
-                        currentFilterButton.position.y = buttonPositions[currentFilterButton.userData.name];
-                    }
-                }
-                // Set new filter as current
-                currentFilterButton = clickedObject;
-                animateClick(clickedObject);
-            }
-        }
-        else if (clickedObject !== currentPlayingButton) {
-            // Only switch song if it's a different button
-            // Stop current sound if playing
-            if (waveformData && waveformData.sound && waveformData.soundStarted) {
-                waveformData.sound.stop();
-                waveformData.soundStarted = false;
-            }
-            // Reset previous button animation
-            if (currentPlayingButton) {
-                currentPlayingButton.userData.pressed = false;
-                currentPlayingButton.userData.isAnimating = false;
-                if (buttonPositions[currentPlayingButton.userData.name]) {
-                    currentPlayingButton.position.y = buttonPositions[currentPlayingButton.userData.name];
-                }
-            }
-            // Set to play state (not paused)
-            stopbutton.userData.clicked = false;
-            // Load new song
-            newsong = true;
-            song = clickedObject.userData.mp3file;
-            currentPlayingButton = clickedObject; // Track current playing button
-            // Animate button press
-            animateClick(clickedObject);
-        }
+        handleClickedObject(clickedObject);
+        return;
+    }
+
+    if (!controls.isLocked && event.target === renderer.domElement) {
+        lockPointer();
     }
 });
 
-// Space key to pause/resume
+function setMovementKey(code, isPressed) {
+    switch (code) {
+        case 'KeyW':
+        case 'ArrowUp':
+            movementState.forward = isPressed;
+            return true;
+        case 'KeyS':
+        case 'ArrowDown':
+            movementState.backward = isPressed;
+            return true;
+        case 'KeyA':
+        case 'ArrowLeft':
+            movementState.left = isPressed;
+            return true;
+        case 'KeyD':
+        case 'ArrowRight':
+            movementState.right = isPressed;
+            return true;
+        case 'ShiftLeft':
+        case 'ShiftRight':
+            movementState.sprint = isPressed;
+            return true;
+        default:
+            return false;
+    }
+}
+
 window.addEventListener('keydown', (event) => {
+    if (setMovementKey(event.code, true)) {
+        event.preventDefault();
+        return;
+    }
+
     if (event.code === 'Space') {
         event.preventDefault(); // Prevent page scroll
+        if (event.repeat) {
+            return;
+        }
         animateClick(stopbutton);
         togglePauseResume();
     }
 });
 
-
+window.addEventListener('keyup', (event) => {
+    if (setMovementKey(event.code, false)) {
+        event.preventDefault();
+    }
+});
 
 // Stop button
 const stopbuttonGeometry = new THREE.CylinderGeometry(0.2, 0.2, 0.1);
@@ -608,6 +712,87 @@ resonceslider.userData.band = true; // Mark as band control
 scene.add(resonceslider);
 clickableObjects.push(resonceslider);
 
+function collidesWithTable(position) {
+    if (!tableCollisionBox) {
+        return false;
+    }
+
+    return position.x >= tableCollisionBox.min.x
+        && position.x <= tableCollisionBox.max.x
+        && position.z >= tableCollisionBox.min.z
+        && position.z <= tableCollisionBox.max.z;
+}
+
+function clampToWorld(position) {
+    position.x = THREE.MathUtils.clamp(position.x, -WORLD_LIMIT, WORLD_LIMIT);
+    position.z = THREE.MathUtils.clamp(position.z, -WORLD_LIMIT, WORLD_LIMIT);
+}
+
+function updatePlayerMovement(delta) {
+    camera.position.y = PLAYER_EYE_HEIGHT;
+
+    if (!controls.isLocked) {
+        return;
+    }
+
+    const forwardInput = Number(movementState.forward) - Number(movementState.backward);
+    const rightInput = Number(movementState.right) - Number(movementState.left);
+
+    if (forwardInput === 0 && rightInput === 0) {
+        return;
+    }
+
+    controls.getDirection(playerForward);
+    playerForward.y = 0;
+
+    if (playerForward.lengthSq() === 0) {
+        return;
+    }
+
+    playerForward.normalize();
+    playerRight.setFromMatrixColumn(camera.matrix, 0);
+    playerRight.y = 0;
+    playerRight.normalize();
+
+    playerMove.set(0, 0, 0)
+        .addScaledVector(playerForward, forwardInput)
+        .addScaledVector(playerRight, rightInput);
+
+    if (playerMove.lengthSq() === 0) {
+        return;
+    }
+
+    const speed = movementState.sprint ? SPRINT_SPEED : WALK_SPEED;
+    playerMove.normalize().multiplyScalar(speed * delta);
+
+    candidatePosition.copy(camera.position).add(playerMove);
+    candidatePosition.y = PLAYER_EYE_HEIGHT;
+    clampToWorld(candidatePosition);
+
+    if (!collidesWithTable(candidatePosition)) {
+        camera.position.copy(candidatePosition);
+        return;
+    }
+
+    axisCandidatePosition.copy(camera.position);
+    axisCandidatePosition.x = candidatePosition.x;
+    clampToWorld(axisCandidatePosition);
+
+    if (!collidesWithTable(axisCandidatePosition)) {
+        camera.position.x = axisCandidatePosition.x;
+    }
+
+    axisCandidatePosition.copy(camera.position);
+    axisCandidatePosition.z = candidatePosition.z;
+    clampToWorld(axisCandidatePosition);
+
+    if (!collidesWithTable(axisCandidatePosition)) {
+        camera.position.z = axisCandidatePosition.z;
+    }
+
+    camera.position.y = PLAYER_EYE_HEIGHT;
+}
+
 function playmusic() {
     if (newsong) {
         loadsong(song);
@@ -692,6 +877,11 @@ function clickanimation() {
 
 function animate() {
     requestAnimationFrame( animate );
+    const now = performance.now();
+    const delta = Math.min((now - lastFrameMs) / 1000, 0.05);
+    lastFrameMs = now;
+
+    updatePlayerMovement(delta);
     playmusic();
     clickanimation();
 
