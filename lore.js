@@ -38,7 +38,12 @@ const CONFIG = {
     groundFlowDecay: 70,
     groundFlowEnergyExponent: 1.45,
     groundFlowPeakWeight: 0.80,
-    groundFlowAverageWeight: 2
+    groundFlowAverageWeight: 2,
+    groundVoronoiCellSize: 0.5,
+    groundVoronoiIdleIntensity: 0.10,
+    groundVoronoiMusicBoost: 0.18,
+    groundVoronoiSpecularSharpness: 38,
+    groundVoronoiEdgeFade: 38
 };
 
 const SPECTRUM_COLOR_ANCHORS = [
@@ -52,7 +57,7 @@ const SPECTRUM_COLOR_ANCHORS = [
     { frequency: 10000, color: new THREE.Color(0xa855f7) }
 ];
 
-const PATCH_VERSION = 11;
+const PATCH_VERSION = 12;
 
 const INSTANCE_CENTER = new THREE.Vector3(0, 0, 0);
 const INSTANCE_SCALE = new THREE.Vector3();
@@ -293,7 +298,13 @@ function createGroundFlowMaterial(energyTexture) {
             uOuterRadius: { value: CONFIG.groundFlowOuterRadius },
             uInnerRadius: { value: CONFIG.groundFlowInnerRadius },
             uArcEdgeFade: { value: CONFIG.groundFlowArcEdgeFade },
-            uOverallEnergy: { value: 0 }
+            uOverallEnergy: { value: 0 },
+            uGroundHalfSize: { value: CONFIG.groundFlowSize * 0.5 },
+            uVoronoiCellSize: { value: CONFIG.groundVoronoiCellSize },
+            uVoronoiIdleIntensity: { value: CONFIG.groundVoronoiIdleIntensity },
+            uVoronoiMusicBoost: { value: CONFIG.groundVoronoiMusicBoost },
+            uVoronoiSpecularSharpness: { value: CONFIG.groundVoronoiSpecularSharpness },
+            uVoronoiEdgeFade: { value: CONFIG.groundVoronoiEdgeFade }
         },
         vertexShader: `
             varying vec3 vWorldPosition;
@@ -315,6 +326,12 @@ function createGroundFlowMaterial(energyTexture) {
             uniform float uInnerRadius;
             uniform float uArcEdgeFade;
             uniform float uOverallEnergy;
+            uniform float uGroundHalfSize;
+            uniform float uVoronoiCellSize;
+            uniform float uVoronoiIdleIntensity;
+            uniform float uVoronoiMusicBoost;
+            uniform float uVoronoiSpecularSharpness;
+            uniform float uVoronoiEdgeFade;
 
             varying vec3 vWorldPosition;
 
@@ -322,6 +339,40 @@ function createGroundFlowMaterial(energyTexture) {
 
             float saturate(float value) {
                 return clamp(value, 0.0, 1.0);
+            }
+
+            vec2 hash22(vec2 point) {
+                vec2 hashed = vec2(
+                    dot(point, vec2(127.1, 311.7)),
+                    dot(point, vec2(269.5, 183.3))
+                );
+                return fract(sin(hashed) * 43758.5453);
+            }
+
+            vec3 getVoronoiData(vec2 point) {
+                vec2 cell = floor(point);
+                vec2 localPoint = fract(point);
+                float closestDistance = 8.0;
+                float secondDistance = 8.0;
+                vec2 closestCell = vec2(0.0);
+
+                for (int y = -1; y <= 1; y++) {
+                    for (int x = -1; x <= 1; x++) {
+                        vec2 offset = vec2(float(x), float(y));
+                        vec2 featurePoint = offset + hash22(cell + offset);
+                        float distanceToPoint = length(featurePoint - localPoint);
+
+                        if (distanceToPoint < closestDistance) {
+                            secondDistance = closestDistance;
+                            closestDistance = distanceToPoint;
+                            closestCell = cell + offset;
+                        } else if (distanceToPoint < secondDistance) {
+                            secondDistance = distanceToPoint;
+                        }
+                    }
+                }
+
+                return vec3(closestDistance, secondDistance - closestDistance, hash22(closestCell).x);
             }
 
             void main() {
@@ -341,33 +392,83 @@ function createGroundFlowMaterial(energyTexture) {
                 float radialStart = smoothstep(uInnerRadius, uInnerRadius + 10.0, radius);
                 float radialEnd = 1.0 - smoothstep(uOuterRadius - 18.0, uOuterRadius + 10.0, radius);
                 float radialMask = radialStart * radialEnd;
+                float flowMask = arcMask * radialMask;
 
                 float outwardWave = 0.5 + 0.5 * sin(radius * 0.21 - uTime * 3.2);
                 float pulse = smoothstep(0.25, 1.0, outwardWave) * (0.35 + 0.65 * uOverallEnergy);
-                float activeFan = bandEnergy * arcMask * radialMask * (0.66 + 0.26 * pulse);
-                float idleFan = arcMask * radialMask * (0.01 + uOverallEnergy * 0.07);
+                float activeFan = bandEnergy * flowMask * (0.66 + 0.26 * pulse);
+                float idleFan = flowMask * (0.01 + uOverallEnergy * 0.07);
 
                 float sourceGlow = (1.0 - smoothstep(0.0, 22.0, radius)) * (0.07 + 0.46 * uOverallEnergy);
                 float skylineContact = bandEnergy
-                    * arcMask
+                    * flowMask
                     * smoothstep(uOuterRadius - 38.0, uOuterRadius - 6.0, radius)
                     * (1.0 - smoothstep(uOuterRadius - 6.0, uOuterRadius + 5.0, radius))
                     * 0.42;
                 float intensity = sourceGlow + activeFan * 0.9 + idleFan + skylineContact;
 
-                if (intensity < 0.004) {
+                vec3 voronoi = getVoronoiData(groundPosition / uVoronoiCellSize);
+                float cellEdge = 1.0 - smoothstep(0.025, 0.18, voronoi.y);
+                float cellInterior = smoothstep(0.08, 0.72, voronoi.x)
+                    * (1.0 - smoothstep(0.72, 1.12, voronoi.x));
+                float facetAngle = voronoi.z * TWO_PI + sin(uTime * 0.12 + voronoi.z * 9.0) * 0.22;
+                vec3 facetNormal = normalize(vec3(
+                    cos(facetAngle) * 0.30,
+                    1.0,
+                    sin(facetAngle) * 0.30
+                ));
+                vec3 viewDirection = normalize(cameraPosition - vWorldPosition);
+                vec3 lightDirection = normalize(vec3(0.34, 0.92, -0.20));
+                vec3 halfDirection = normalize(viewDirection + lightDirection);
+                float specular = pow(
+                    max(dot(facetNormal, halfDirection), 0.0),
+                    uVoronoiSpecularSharpness
+                );
+                float fresnel = pow(1.0 - saturate(dot(facetNormal, viewDirection)), 2.0);
+                float movingGlint = 0.55 + 0.45 * sin(
+                    dot(groundPosition, vec2(0.035, -0.027)) - uTime * 0.32 + voronoi.z * 7.0
+                );
+                float cellVariation = 0.78 + voronoi.z * 0.30;
+                float glassPattern = cellInterior * (0.30 + specular * 1.9 + fresnel * 0.42)
+                    + cellEdge * (0.22 + specular * 0.68);
+                glassPattern *= cellVariation;
+                glassPattern *= 0.72 + movingGlint * 0.28;
+
+                float squareDistance = max(abs(groundPosition.x), abs(groundPosition.y));
+                float groundEdgeMask = 1.0 - smoothstep(
+                    uGroundHalfSize - uVoronoiEdgeFade,
+                    uGroundHalfSize,
+                    squareDistance
+                );
+                float voronoiStrength = (
+                    uVoronoiIdleIntensity
+                    + uOverallEnergy * uVoronoiMusicBoost
+                    + bandEnergy * flowMask * 0.26
+                ) * groundEdgeMask;
+                float voronoiIntensity = glassPattern * voronoiStrength;
+
+                if (intensity + voronoiIntensity < 0.004) {
                     discard;
                 }
 
                 vec3 whiteHot = vec3(1.0, 1.0, 0.92);
+                vec3 silver = vec3(0.78, 0.86, 0.94);
                 vec3 color = mix(
                     bandColor * 0.28,
                     bandColor,
                     saturate(activeFan * 1.6 + uOverallEnergy * 0.28)
                 );
                 color = mix(color, whiteHot, saturate(sourceGlow * 2.0 + bandEnergy * 0.05));
+                vec3 voronoiColor = mix(
+                    silver,
+                    bandColor * 1.16,
+                    flowMask * saturate(0.20 + bandEnergy * 0.92)
+                );
+                vec3 combinedColor = color * (0.82 + intensity * 0.9)
+                    + voronoiColor * voronoiIntensity;
+                float combinedAlpha = saturate(intensity * 0.78 + voronoiIntensity * 0.92);
 
-                gl_FragColor = vec4(color * (0.82 + intensity * 0.9), saturate(intensity * 0.78));
+                gl_FragColor = vec4(combinedColor, combinedAlpha);
             }
         `,
         blending: THREE.AdditiveBlending,
