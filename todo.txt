@@ -1,0 +1,24 @@
+- Static Waves for periodic signals (LORE)
+- Filters knobs change on buildings (ALE)
+- Add directional Light instead of athmosferic (ALE)
+- Textures: At least one light, textures of different kinds (color, normal, specular, …) (ALE)
+  Infinite terrain
+- Hierarchical models: At least one complex model (?) 
+  cambio vetro o cambio disco o ...
+- Hierarchical models should perform animations that exploit their structure (?)
+
+Work on the project, before the deadline please
+activate GitHub Pages in the main directory and check
+that your project is executable on GitHub. Put the link in
+the README file.
+
+Project presentation
+
+The accompanying document should be both a technical
+presentation and a user manual and contain:
+Description of the environment used (basic WebGL or other)
+List of all the libraries, tools and models used in the project but
+not developed by the team
+Description of all the technical aspects of the project
+Description of the implemented interactions
+The length is up to you, at least 5-10 pages
