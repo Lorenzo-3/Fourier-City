@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { PointerLockControls } from 'three/examples/jsm/controls/PointerLockControls.js';
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
+import { initializeLore, updateLore } from './lore.js';
 
 const renderer = new THREE.WebGLRenderer({ antialias: true } );
 renderer.setSize( window.innerWidth, window.innerHeight );
@@ -221,6 +222,7 @@ loader.load('models/table_wireframe.obj', (object) => {
 // Audio setup
 const sound = new THREE.PositionalAudio( listener );
 const audioLoader = new THREE.AudioLoader();
+initializeLore({ scene, camera, audio: sound });
 
 // Web Audio filter nodes
 let filters = null;
@@ -274,26 +276,12 @@ const knobToFilter = {
 
 function rewireAudioGraph() {
     if (!sound || !filtersInitialized) return;
-    
-    const context = listener.context;
-    if (!context) return;
-    
-    const source = sound.getOutput();
-    if (!source) return;
-    
-    try {
-        source.disconnect();
-        
-        if (activeFilter && filters && filters[activeFilter]) {
-            const filter = filters[activeFilter];
-            source.connect(filter);
-            filter.connect(context.destination);
-        } else {
-            source.connect(context.destination);
-        }
-    } catch (e) {
-        console.error('Error rewiring audio graph:', e);
-    }
+
+    const activeAudioFilter = activeFilter && filters?.[activeFilter]
+        ? [filters[activeFilter]]
+        : [];
+
+    sound.setFilters(activeAudioFilter);
 }
 
 let waveformData = null; 
@@ -1300,6 +1288,7 @@ function animate() {
     updatePlayerMovement(delta);
     playmusic();
     clickanimation();
+    updateLore();
 
     renderer.render( scene, camera );
 }

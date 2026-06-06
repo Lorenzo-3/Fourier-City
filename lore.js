@@ -6,17 +6,18 @@ import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeome
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 
 const CONFIG = {
-    buildingCount:100,
-    arcDegrees: 300,
+    buildingCount:70,
+    arcDegrees: 210,
     gapCenterRadians: 0,
     radius: 135,
     modelScale: 0.6,
     modelYawCorrectionDegrees: 0,
     solidColor: 0x05070b,
     solidEmissiveColor: 0x010306,
-    wireframeColor: 0x00fff0,
     wireframeLineWidth: 1,
     wireframeSurfaceScale: 1.004,
+    wireframeIdleBrightness: 0.35,
+    wireframeEnergyBrightness: 0.65,
     skylineUpdateFps: 30,
     fftSize: 1024,
     analyserMinDecibels: -90,
@@ -40,7 +41,18 @@ const CONFIG = {
     groundFlowAverageWeight: 2
 };
 
-const PATCH_VERSION = 9;
+const SPECTRUM_COLOR_ANCHORS = [
+    { frequency: 40, color: new THREE.Color(0xff3b30) },
+    { frequency: 100, color: new THREE.Color(0xff6b3d) },
+    { frequency: 200, color: new THREE.Color(0xffd84d) },
+    { frequency: 500, color: new THREE.Color(0xb8f34a) },
+    { frequency: 1000, color: new THREE.Color(0x39e58c) },
+    { frequency: 2000, color: new THREE.Color(0x33d6e8) },
+    { frequency: 4000, color: new THREE.Color(0x3a8cff) },
+    { frequency: 10000, color: new THREE.Color(0xa855f7) }
+];
+
+const PATCH_VERSION = 11;
 
 const INSTANCE_CENTER = new THREE.Vector3(0, 0, 0);
 const INSTANCE_SCALE = new THREE.Vector3();
@@ -49,20 +61,22 @@ const INSTANCE_ORIENTER = new THREE.Object3D();
 const WIREFRAME_POINT = new THREE.Vector3();
 
 const state = window.__fourierCityLore ?? {
-    patched: false,
     patchVersion: 0,
     scene: null,
     camera: null,
     skyline: null,
     skylineLoading: false,
-    animationLoopStarted: false,
+    resumeHandlersInstalled: false,
     buildings: [],
     solidInstances: null,
     wireframeLines: null,
     wireframePositions: null,
     wireframeLineBuffer: null,
+    wireframeColors: null,
+    wireframeColorBuffer: null,
     wireframeMaterial: null,
     wireframeYFactors: null,
+    baseBuildingColors: new Float32Array(CONFIG.buildingCount * 3),
     groundFlow: null,
     groundFlowMaterial: null,
     groundFlowEnergyTexture: null,
@@ -95,15 +109,14 @@ if (!state.groundFlowEnergyData || state.groundFlowEnergyData.length !== CONFIG.
     state.groundFlowEnergyTexture = null;
 }
 
-if (typeof state.groundFlowOverallEnergy !== 'number') {
-    state.groundFlowOverallEnergy = 0;
+if (!state.baseBuildingColors || state.baseBuildingColors.length !== CONFIG.buildingCount * 3) {
+    state.baseBuildingColors = new Float32Array(CONFIG.buildingCount * 3);
 }
 
-if (!state.patched) {
-    patchSceneGraph();
-    patchAudio();
-    installAudioResumeHandlers();
-    state.patched = true;
+buildBaseBuildingColors();
+
+if (typeof state.groundFlowOverallEnergy !== 'number') {
+    state.groundFlowOverallEnergy = 0;
 }
 
 if (state.patchVersion !== PATCH_VERSION) {
@@ -111,56 +124,22 @@ if (state.patchVersion !== PATCH_VERSION) {
     state.patchVersion = PATCH_VERSION;
 }
 
-startAnimationLoop();
-
-function patchSceneGraph() {
-    const originalAdd = THREE.Object3D.prototype.add;
-
-    THREE.Object3D.prototype.add = function addWithLore(...objects) {
-        const result = originalAdd.apply(this, objects);
-
-        if (this instanceof THREE.Scene) {
-            state.scene = this;
-            ensureGroundFlow(this);
-            ensureSkyline(this);
-        } else if (this instanceof THREE.Camera) {
-            state.camera = this;
-        }
-
-        return result;
-    };
-}
-
-function startAnimationLoop() {
-    if (state.animationLoopStarted) {
-        return;
+export function initializeLore({ scene, camera, audio }) {
+    if (!scene || !camera || !audio) {
+        throw new Error('initializeLore requires a scene, camera, and audio source');
     }
 
-    state.animationLoopStarted = true;
+    state.scene = scene;
+    state.camera = camera;
 
-    const tick = () => {
-        updateSkyline();
-        requestAnimationFrame(tick);
-    };
-
-    requestAnimationFrame(tick);
+    ensureGroundFlow(scene);
+    ensureSkyline(scene);
+    bindAudio(audio, true);
+    installAudioResumeHandlers();
 }
 
-function patchAudio() {
-    const originalSetBuffer = THREE.Audio.prototype.setBuffer;
-    const originalPlay = THREE.Audio.prototype.play;
-
-    THREE.Audio.prototype.setBuffer = function setBufferWithLore(buffer) {
-        const result = originalSetBuffer.call(this, buffer);
-        bindAudio(this, true);
-        return result;
-    };
-
-    THREE.Audio.prototype.play = function playWithLore(delay = 0) {
-        const result = originalPlay.call(this, delay);
-        bindAudio(this);
-        return result;
-    };
+export function updateLore() {
+    updateSkyline();
 }
 
 function bindAudio(audio, resetCalibration = false) {
@@ -196,6 +175,10 @@ function resetEnergyCalibration() {
 }
 
 function installAudioResumeHandlers() {
+    if (state.resumeHandlersInstalled) {
+        return;
+    }
+
     const resumeAudioContext = () => {
         const context = state.currentAudio?.context;
 
@@ -206,6 +189,7 @@ function installAudioResumeHandlers() {
 
     window.addEventListener('pointerdown', resumeAudioContext);
     window.addEventListener('keydown', resumeAudioContext);
+    state.resumeHandlersInstalled = true;
 }
 
 function resetSkylineState() {
@@ -222,6 +206,8 @@ function resetSkylineState() {
     state.wireframeLines = null;
     state.wireframePositions = null;
     state.wireframeLineBuffer = null;
+    state.wireframeColors = null;
+    state.wireframeColorBuffer = null;
     state.wireframeMaterial = null;
     state.wireframeYFactors = null;
     state.currentScales.fill(0);
@@ -276,6 +262,8 @@ function disposeGroundFlow() {
 }
 
 function createGroundFlowEnergyTexture() {
+    initializeGroundFlowSpectrumData();
+
     const texture = new THREE.DataTexture(
         state.groundFlowEnergyData,
         CONFIG.buildingCount,
@@ -342,10 +330,9 @@ function createGroundFlowMaterial(energyTexture) {
                 float angle = atan(groundPosition.x, groundPosition.y);
                 float clockwiseDelta = mod(uStartAngle - angle + TWO_PI, TWO_PI);
                 float bandUv = saturate(clockwiseDelta / max(uArcRadians, 0.0001));
-                float bandEnergy = max(
-                    texture2D(uEnergyMap, vec2(bandUv, 0.5)).r,
-                    uOverallEnergy * 0.05
-                );
+                vec4 bandSample = texture2D(uEnergyMap, vec2(bandUv, 0.5));
+                vec3 bandColor = bandSample.rgb;
+                float bandEnergy = max(bandSample.a, uOverallEnergy * 0.05);
 
                 float leadingEdge = smoothstep(0.0, uArcEdgeFade, clockwiseDelta);
                 float trailingEdge = 1.0 - smoothstep(uArcRadians - uArcEdgeFade, uArcRadians, clockwiseDelta);
@@ -372,11 +359,13 @@ function createGroundFlowMaterial(energyTexture) {
                     discard;
                 }
 
-                vec3 deepCyan = vec3(0.0, 0.34, 0.45);
-                vec3 cyan = vec3(0.0, 1.0, 0.92);
                 vec3 whiteHot = vec3(1.0, 1.0, 0.92);
-                vec3 color = mix(deepCyan, cyan, saturate(activeFan * 1.6 + uOverallEnergy * 0.28));
-                color = mix(color, whiteHot, saturate(sourceGlow * 0.65 + bandEnergy * 0.05));
+                vec3 color = mix(
+                    bandColor * 0.28,
+                    bandColor,
+                    saturate(activeFan * 1.6 + uOverallEnergy * 0.28)
+                );
+                color = mix(color, whiteHot, saturate(sourceGlow * 2.0 + bandEnergy * 0.05));
 
                 gl_FragColor = vec4(color * (0.82 + intensity * 0.9), saturate(intensity * 0.78));
             }
@@ -522,9 +511,10 @@ function buildSkyline(geometry, wireframeGeometry) {
         specular: 0x2f3842
     });
     const wireframeMaterial = new LineMaterial({
-        color: CONFIG.wireframeColor,
+        color: 0xffffff,
         linewidth: CONFIG.wireframeLineWidth,
         worldUnits: false,
+        vertexColors: true,
         depthTest: true,
         depthWrite: false,
         transparent: false,
@@ -542,6 +532,8 @@ function buildSkyline(geometry, wireframeGeometry) {
     state.wireframeLines = wireframeLines;
     state.wireframePositions = wireframeData.positions;
     state.wireframeLineBuffer = wireframeData.lineBuffer;
+    state.wireframeColors = wireframeData.colors;
+    state.wireframeColorBuffer = wireframeData.colorBuffer;
     state.wireframeMaterial = wireframeMaterial;
     state.wireframeYFactors = wireframeData.yFactors;
 
@@ -588,6 +580,7 @@ function buildSkylineWireframe(wireframeGeometry, material) {
     const sourcePositions = wireframeGeometry.getAttribute('position');
     const sourceCount = sourcePositions.count;
     const positions = new Float32Array(sourceCount * CONFIG.buildingCount * 3);
+    const colors = new Float32Array(sourceCount * CONFIG.buildingCount * 3);
     const yFactors = new Float32Array(sourceCount * CONFIG.buildingCount);
     const lineGeometry = new LineSegmentsGeometry();
     const line = new LineSegments2(lineGeometry, material);
@@ -602,6 +595,10 @@ function buildSkylineWireframe(wireframeGeometry, material) {
 
         INSTANCE_ORIENTER.position.copy(position);
         INSTANCE_ORIENTER.lookAt(INSTANCE_CENTER);
+        const colorOffset = buildingIndex * 3;
+        const red = state.baseBuildingColors[colorOffset] * CONFIG.wireframeIdleBrightness;
+        const green = state.baseBuildingColors[colorOffset + 1] * CONFIG.wireframeIdleBrightness;
+        const blue = state.baseBuildingColors[colorOffset + 2] * CONFIG.wireframeIdleBrightness;
 
         for (let vertexIndex = 0; vertexIndex < sourceCount; vertexIndex += 1) {
             const sourceOffset = vertexIndex * 3;
@@ -618,16 +615,22 @@ function buildSkylineWireframe(wireframeGeometry, material) {
             positions[targetOffset] = position.x + WIREFRAME_POINT.x;
             positions[targetOffset + 1] = localY * CONFIG.modelScale * 0.06;
             positions[targetOffset + 2] = position.z + WIREFRAME_POINT.z;
+            colors[targetOffset] = red;
+            colors[targetOffset + 1] = green;
+            colors[targetOffset + 2] = blue;
             yFactors[targetIndex] = localY;
         }
     }
 
     lineGeometry.setPositions(positions);
+    lineGeometry.setColors(colors);
 
     return {
         lines: line,
         positions,
         lineBuffer: lineGeometry.attributes.instanceStart.data,
+        colors,
+        colorBuffer: lineGeometry.attributes.instanceColorStart.data,
         yFactors
     };
 }
@@ -688,6 +691,7 @@ function updateSkyline() {
     state.solidInstances.instanceMatrix.needsUpdate = true;
     syncWireframeResolution();
     syncWireframePositions();
+    syncWireframeColors();
 }
 
 function updateGroundFlow(energies, deltaSeconds) {
@@ -704,15 +708,17 @@ function updateGroundFlow(energies, deltaSeconds) {
             THREE.MathUtils.clamp(energies[index] ?? 0, 0, 1),
             CONFIG.groundFlowEnergyExponent
         );
-        const value = Math.round(shapedEnergy * 255);
         const offset = index * 4;
+        const currentEnergy = data[offset + 3] / 255;
+        const rate = shapedEnergy > currentEnergy
+            ? CONFIG.groundFlowAttack
+            : CONFIG.groundFlowDecay;
+        const blend = 1 - Math.exp(-rate * deltaSeconds);
+        const nextEnergy = THREE.MathUtils.lerp(currentEnergy, shapedEnergy, blend);
 
-        data[offset] = value;
-        data[offset + 1] = value;
-        data[offset + 2] = value;
-        data[offset + 3] = 255;
-        peakEnergy = Math.max(peakEnergy, shapedEnergy);
-        summedEnergy += shapedEnergy;
+        data[offset + 3] = Math.round(nextEnergy * 255);
+        peakEnergy = Math.max(peakEnergy, nextEnergy);
+        summedEnergy += nextEnergy;
     }
 
     state.groundFlowEnergyTexture.needsUpdate = true;
@@ -768,6 +774,90 @@ function syncWireframePositions() {
     }
 
     lineBuffer.needsUpdate = true;
+}
+
+function syncWireframeColors() {
+    const colors = state.wireframeColors;
+    const colorBuffer = state.wireframeColorBuffer;
+    const yFactors = state.wireframeYFactors;
+
+    if (!colors || !colorBuffer || !yFactors) {
+        return;
+    }
+
+    const verticesPerBuilding = yFactors.length / CONFIG.buildingCount;
+
+    for (let index = 0; index < yFactors.length; index += 1) {
+        const buildingIndex = Math.floor(index / verticesPerBuilding);
+        const building = state.buildings[buildingIndex];
+        const buildingColorOffset = buildingIndex * 3;
+        const colorOffset = index * 3;
+        const visualEnergy = THREE.MathUtils.clamp(
+            (state.currentScales[buildingIndex] / CONFIG.modelScale - building.restHeight)
+                / CONFIG.heightBoost,
+            0,
+            1
+        );
+        const brightness = CONFIG.wireframeIdleBrightness
+            + CONFIG.wireframeEnergyBrightness * visualEnergy;
+
+        colors[colorOffset] = state.baseBuildingColors[buildingColorOffset] * brightness;
+        colors[colorOffset + 1] = state.baseBuildingColors[buildingColorOffset + 1] * brightness;
+        colors[colorOffset + 2] = state.baseBuildingColors[buildingColorOffset + 2] * brightness;
+    }
+
+    colorBuffer.needsUpdate = true;
+}
+
+function buildBaseBuildingColors() {
+    const color = new THREE.Color();
+
+    for (let index = 0; index < CONFIG.buildingCount; index += 1) {
+        const ratio = CONFIG.buildingCount > 1 ? index / (CONFIG.buildingCount - 1) : 0;
+        const frequency = CONFIG.minHz * ((CONFIG.maxHz / CONFIG.minHz) ** ratio);
+        const offset = index * 3;
+
+        sampleSpectrumColor(frequency, color);
+        state.baseBuildingColors[offset] = color.r;
+        state.baseBuildingColors[offset + 1] = color.g;
+        state.baseBuildingColors[offset + 2] = color.b;
+    }
+}
+
+function sampleSpectrumColor(frequency, target) {
+    const clampedFrequency = THREE.MathUtils.clamp(
+        frequency,
+        SPECTRUM_COLOR_ANCHORS[0].frequency,
+        SPECTRUM_COLOR_ANCHORS[SPECTRUM_COLOR_ANCHORS.length - 1].frequency
+    );
+
+    for (let index = 1; index < SPECTRUM_COLOR_ANCHORS.length; index += 1) {
+        const lower = SPECTRUM_COLOR_ANCHORS[index - 1];
+        const upper = SPECTRUM_COLOR_ANCHORS[index];
+
+        if (clampedFrequency <= upper.frequency) {
+            const lowerLog = Math.log(lower.frequency);
+            const upperLog = Math.log(upper.frequency);
+            const ratio = (Math.log(clampedFrequency) - lowerLog) / (upperLog - lowerLog);
+            return target.copy(lower.color).lerp(upper.color, ratio);
+        }
+    }
+
+    return target.copy(SPECTRUM_COLOR_ANCHORS[SPECTRUM_COLOR_ANCHORS.length - 1].color);
+}
+
+function initializeGroundFlowSpectrumData() {
+    const data = state.groundFlowEnergyData;
+
+    for (let index = 0; index < CONFIG.buildingCount; index += 1) {
+        const colorOffset = index * 3;
+        const dataOffset = index * 4;
+
+        data[dataOffset] = Math.round(state.baseBuildingColors[colorOffset] * 255);
+        data[dataOffset + 1] = Math.round(state.baseBuildingColors[colorOffset + 1] * 255);
+        data[dataOffset + 2] = Math.round(state.baseBuildingColors[colorOffset + 2] * 255);
+        data[dataOffset + 3] = 0;
+    }
 }
 
 function readFrequencyBandEnergies() {
