@@ -1,4 +1,4 @@
-- Static Waves for periodic signals (LORE)
+- [x] Static Waves for periodic signals (LORE)
 - Filters knobs change on buildings (ALE)
 - Add directional Light instead of athmosferic (ALE)
 - Textures: At least one light, textures of different kinds (color, normal, specular, …) (ALE)

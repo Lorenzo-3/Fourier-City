@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { PointerLockControls } from 'three/examples/jsm/controls/PointerLockControls.js';
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
 import { initializeLore, updateLore } from './lore.js';
+import { createProceduralSignal, PROCEDURAL_SIGNALS } from './procedural-signals.js';
 
 const renderer = new THREE.WebGLRenderer({ antialias: true } );
 renderer.setSize( window.innerWidth, window.innerHeight );
@@ -52,17 +53,20 @@ fileInput.addEventListener('change', (event) => {
     const file = event.target.files[0];
     if (file) {
         const url = URL.createObjectURL(file);
-        if (waveformData && waveformData.sound && waveformData.soundStarted) {
-            waveformData.sound.stop();
-            waveformData.soundStarted = false;
+        const source = createMp3Source(url);
+
+        if (selectedMusicObjectUrl) {
+            URL.revokeObjectURL(selectedMusicObjectUrl);
         }
+        selectedMusicObjectUrl = url;
         if (musicbutton) {
-            musicbutton.userData.mp3file = url;
+            musicbutton.userData.source = source;
         }
-        newsong = true;
-        song = url;
-        stopbutton.userData.clicked = false;
+        resetPlayingButtonVisual(currentPlayingButton);
+        resetStopButtonVisual();
+        selectAudioSource(source);
         currentPlayingButton = musicbutton;
+        fileInput.value = '';
     }
     // Re-lock pointer after file selection
     setTimeout(() => lockPointer(), 100);
@@ -285,9 +289,10 @@ function rewireAudioGraph() {
 }
 
 let waveformData = null; 
-let newsong = true;
-let song = 'sounds/ijustthrewouthelovefmydreams.mp3';
-let isLoading = false;
+let currentSource = createMp3Source('sounds/ijustthrewouthelovefmydreams.mp3');
+let sourceRequestVersion = 1;
+let pendingSourceVersion = 1;
+let selectedMusicObjectUrl = null;
 let soundReady = false;
 let waveformReady = false;
 let currentWaveformMesh = null;
@@ -331,89 +336,149 @@ const waveformMaterial = new THREE.ShaderMaterial({
     `
 });
 
-// EXACT SAME loadsong from first code
-function loadsong(song) {
-    if (isLoading) return;
-    isLoading = true;
+function createMp3Source(url) {
+    return { kind: 'mp3', url };
+}
+
+function createGeneratedSource(signal) {
+    return { kind: 'procedural', signal };
+}
+
+function selectAudioSource(source) {
+    stopCurrentPlayback();
+    disposeCurrentWaveform();
+    waveformData = null;
+    currentSource = source;
+    sourceRequestVersion += 1;
+    pendingSourceVersion = sourceRequestVersion;
+    soundReady = false;
+    waveformReady = false;
+}
+
+function stopCurrentPlayback() {
+    if (sound.isPlaying) {
+        sound.stop();
+    }
+
+    if (waveformData) {
+        waveformData.soundStarted = false;
+    }
+}
+
+function loadAudioSource(source, requestVersion) {
     soundReady = false;
     waveformReady = false;
     
     initializeFilters();
 
-    audioLoader.load(song, function(buffer) {
-        if (currentWaveformMesh) {
-            scene.remove(currentWaveformMesh);
-            currentWaveformMesh.geometry.dispose();
-            currentWaveformMesh = null;
+    if (source.kind === 'procedural') {
+        const generatedSignal = createProceduralSignal(listener.context, source.signal);
+        finishLoadingSource(
+            generatedSignal.buffer,
+            generatedSignal.visualizationSamples,
+            true,
+            requestVersion
+        );
+        return;
+    }
+
+    audioLoader.load(source.url, function(buffer) {
+        if (requestVersion !== sourceRequestVersion) {
+            return;
         }
 
-        sound.setBuffer(buffer);
-        sound.setRefDistance(2);
-        sound.setRolloffFactor(1);
-        sound.setDistanceModel('inverse');
-        sound.setDirectionalCone(360, 360, 1);
-        
-        // Rewire audio with filter after buffer is set
-        rewireAudioGraph();
-        
-        const rawAudioData = buffer.getChannelData(0);
-        
-        const fullWaveformGeometry = new THREE.BufferGeometry();
-        const fullPositions = new Float32Array(rawAudioData.length * 3);
-        const duration = buffer.duration;
-        const width = 20;
-        const totalWidth = duration * width;
-
-        const amplitude = 0.8;
-        for (let i = 0; i < rawAudioData.length; i++) {
-            fullPositions[i * 3] = (i / rawAudioData.length) * totalWidth -1.5; 
-            fullPositions[i * 3 + 1] = 1.8 + rawAudioData[i] * amplitude;
-            fullPositions[i * 3 + 2] = -0.5;
-        }
-        
-        fullWaveformGeometry.setAttribute('position', new THREE.BufferAttribute(fullPositions, 3));
-
-        const fullWaveform = new THREE.Line(fullWaveformGeometry, waveformMaterial);
-        currentWaveformMesh = fullWaveform;
-        scene.add(fullWaveform);
-        waveformReady = true;
-        
-        waveformData = {
-            line: fullWaveform,
-            duration: duration,
-            totalWidth: totalWidth,
-            sound: sound,
-            startTime: null,
-            pausedElapsed: 0
-        };
-        
-        if (tableObject) {
-            tableObject.add(sound);
-        } else {
-            scene.add(sound);
-        }
-
-        soundReady = true;
-        isLoading = false;
+        finishLoadingSource(buffer, buffer.getChannelData(0), false, requestVersion);
     }, null, function(err) {
-        console.error("Audio Load Error:", err);
-        isLoading = false;
+        if (requestVersion === sourceRequestVersion) {
+            console.error('Audio Load Error:', err);
+        }
     });
+}
+
+function finishLoadingSource(buffer, visualizationSamples, isStatic, requestVersion) {
+    if (requestVersion !== sourceRequestVersion) {
+        return;
+    }
+
+    disposeCurrentWaveform();
+    sound.setBuffer(buffer);
+    sound.setLoop(true);
+    sound.setPlaybackRate(getPitchPlaybackRate());
+    sound.setRefDistance(2);
+    sound.setRolloffFactor(1);
+    sound.setDistanceModel('inverse');
+    sound.setDirectionalCone(360, 360, 1);
+    applyActiveFilterParameters();
+    rewireAudioGraph();
+
+    const totalWidth = isStatic ? 3 : buffer.duration * 20;
+    const fullWaveformGeometry = new THREE.BufferGeometry();
+    const fullPositions = new Float32Array(visualizationSamples.length * 3);
+    const amplitude = isStatic ? 2 : 0.8;
+
+    for (let index = 0; index < visualizationSamples.length; index += 1) {
+        fullPositions[index * 3] = (index / Math.max(visualizationSamples.length - 1, 1)) * totalWidth - 1.5;
+        fullPositions[index * 3 + 1] = 1.8 + visualizationSamples[index] * amplitude;
+        fullPositions[index * 3 + 2] = -0.5;
+    }
+
+    fullWaveformGeometry.setAttribute('position', new THREE.BufferAttribute(fullPositions, 3));
+
+    const fullWaveform = new THREE.Line(fullWaveformGeometry, waveformMaterial);
+    fullWaveform.position.x = 0;
+    waveformMaterial.uniforms.linePositionX.value = 0;
+    currentWaveformMesh = fullWaveform;
+    scene.add(fullWaveform);
+
+    waveformData = {
+        line: fullWaveform,
+        duration: buffer.duration,
+        totalWidth,
+        isStatic,
+        sound,
+        startTime: null,
+        pausedElapsed: 0,
+        soundStarted: false
+    };
+
+    if (tableObject) {
+        tableObject.add(sound);
+    } else {
+        scene.add(sound);
+    }
+
+    waveformReady = true;
+    soundReady = true;
+}
+
+function disposeCurrentWaveform() {
+    if (!currentWaveformMesh) {
+        return;
+    }
+
+    scene.remove(currentWaveformMesh);
+    currentWaveformMesh.geometry.dispose();
+    currentWaveformMesh = null;
+}
+
+function getPitchPlaybackRate() {
+    const pitch = knobObjects.find(knob => knob.userData.name === 'pitchknob');
+    return pitch ? 0.5 + pitch.userData.value : 1;
 }
 
 function togglePauseResume() {
     if (!stopbutton.userData.clicked) {
         stopbutton.userData.clicked = true;
-        if (waveformData && waveformData.soundStarted) {
-            waveformData.sound.pause();
+        if (waveformData?.soundStarted) {
+            sound.pause();
             const currentTime = listener.context.currentTime;
             waveformData.pausedElapsed = currentTime - waveformData.startTime;
             waveformData.soundStarted = false;
         }
     } else {
         stopbutton.userData.clicked = false;
-        if (waveformData && waveformData.sound) {
-            waveformData.sound.play();
+        if (waveformData && !sound.isPlaying) {
+            sound.play();
             waveformData.startTime = listener.context.currentTime - waveformData.pausedElapsed;
             waveformData.soundStarted = true;
         }
@@ -441,6 +506,28 @@ function animateClick(button) {
     button.userData.isAnimating = true;
     button.userData.animationStart = Date.now();
     button.userData.originalY = buttonPositions[button.userData.name];
+}
+
+function resetPlayingButtonVisual(button) {
+    if (!button) {
+        return;
+    }
+
+    button.userData.pressed = false;
+    button.userData.isAnimating = false;
+
+    const originalY = buttonPositions[button.userData.name];
+    if (originalY !== undefined) {
+        button.position.y = originalY;
+        if (button.userData.textSprite) {
+            button.userData.textSprite.position.y = originalY + 0.15;
+        }
+    }
+}
+
+function resetStopButtonVisual() {
+    stopbutton.userData.clicked = false;
+    resetPlayingButtonVisual(stopbutton);
 }
 
 function getClickedObject(event) {
@@ -493,31 +580,16 @@ function handleClickedObject(clickedObject) {
             }
             currentFilterButton = clickedObject;
             activeFilter = clickedObject.userData.name.toLowerCase();
+            applyActiveFilterParameters();
             animateClick(clickedObject);
             rewireAudioGraph();
         }
     }
     else if (clickedObject !== currentPlayingButton) {
-        if (waveformData && waveformData.sound && waveformData.soundStarted) {
-            waveformData.sound.stop();
-            waveformData.soundStarted = false;
-        }
-        if (currentPlayingButton) {
-            currentPlayingButton.userData.pressed = false;
-            currentPlayingButton.userData.isAnimating = false;
-            if (buttonPositions[currentPlayingButton.userData.name]) {
-                currentPlayingButton.position.y = buttonPositions[currentPlayingButton.userData.name];
-            }
-        }
-        // Reset stop button state and visual appearance to unpressed
-        stopbutton.userData.clicked = false;
-        stopbutton.userData.pressed = false;
-        stopbutton.userData.isAnimating = false;
-        if (buttonPositions['Stop/Resume']) {
-            stopbutton.position.y = buttonPositions['Stop/Resume'];
-        }
-        newsong = true;
-        song = clickedObject.userData.mp3file;
+        stopCurrentPlayback();
+        resetPlayingButtonVisual(currentPlayingButton);
+        resetStopButtonVisual();
+        selectAudioSource(clickedObject.userData.source);
         currentPlayingButton = clickedObject;
         animateClick(clickedObject);
     }
@@ -715,7 +787,7 @@ function createKnobMesh(position, name, initialValue, minValue, maxValue) {
 // Knobs use canvas-generated texture (no external image file needed)
 
 // Helper function to create buttons
-function createButton(position, name, color, text, isBand = false, mp3file = null, isMusic = false, isSelect = false) {
+function createButton(position, name, color, text, isBand = false, source = null, isMusic = false, isSelect = false) {
     let geometry, material, button;
     
     if (isMusic) {
@@ -739,8 +811,8 @@ function createButton(position, name, color, text, isBand = false, mp3file = nul
         button.userData.band = true;
     }
     
-    if (mp3file) {
-        button.userData.mp3file = mp3file;
+    if (source) {
+        button.userData.source = source;
     }
     
     if (name === 'Music') {
@@ -774,7 +846,7 @@ const sinebutton = createButton(
     0x00ff00,
     'SINE',
     false,
-    'sounds/sine_wave.mp3'
+    createGeneratedSource(PROCEDURAL_SIGNALS.sine)
 );
 
 const squarebutton = createButton(
@@ -783,7 +855,7 @@ const squarebutton = createButton(
     0x00ff00,
     'SQUARE',
     false,
-    'sounds/square_wave.mp3'
+    createGeneratedSource(PROCEDURAL_SIGNALS.square)
 );
 
 const trianglebutton = createButton(
@@ -792,7 +864,7 @@ const trianglebutton = createButton(
     0x00ff00,
     'TRIANGLE',
     false,
-    'sounds/triangle_wave.mp3'
+    createGeneratedSource(PROCEDURAL_SIGNALS.triangle)
 );
 
 const sawbutton = createButton(
@@ -801,7 +873,7 @@ const sawbutton = createButton(
     0x00ff00,
     'SAW',
     false,
-    'sounds/saw_wave.mp3'
+    createGeneratedSource(PROCEDURAL_SIGNALS.saw)
 );
 
 const noisebutton = createButton(
@@ -810,7 +882,7 @@ const noisebutton = createButton(
     0x00ff00,
     'NOISE',
     false,
-    'sounds/noise_wave.mp3'
+    createGeneratedSource(PROCEDURAL_SIGNALS.noise)
 );
 
 const richbutton = createButton(
@@ -819,7 +891,7 @@ const richbutton = createButton(
     0x00ff00,
     'RICH',
     false,
-    'sounds/rich_wave.mp3'
+    createGeneratedSource(PROCEDURAL_SIGNALS.rich)
 );
 
 const musicbutton = createButton(
@@ -828,14 +900,13 @@ const musicbutton = createButton(
     0x0000ff,
     'MUSIC',
     false,
-    'sounds/ijustthrewouthelovefmydreams.mp3',
+    createMp3Source('sounds/ijustthrewouthelovefmydreams.mp3'),
     true
 );
 
 buttonPositions['Music'] = musicbutton.position.y;
 currentPlayingButton = musicbutton;
-song = musicbutton.userData.mp3file;
-newsong = true;
+currentSource = musicbutton.userData.source;
 
 const selectmusicbutton = createButton(
     new THREE.Vector3(0.45, 1.26, 0.45),
@@ -923,6 +994,17 @@ function updateFilterParameter(knobName, value) {
             const gain = -18 + value * 36;
             filter.gain.value = gain;
             break;
+    }
+}
+
+function applyActiveFilterParameters() {
+    const activeKnobNames = filterConfig[activeFilter]?.knobs ?? [];
+
+    for (const knobName of activeKnobNames) {
+        const knob = knobObjects.find(candidate => candidate.userData.name === knobName);
+        if (knob) {
+            updateFilterParameter(knobName, knob.userData.value);
+        }
     }
 }
 
@@ -1019,16 +1101,16 @@ function updatePlayerMovement(delta) {
     camera.position.y = PLAYER_EYE_HEIGHT;
 }
 
-// EXACT SAME playmusic from first code
 function playmusic() {
-    if (newsong) {
-        loadsong(song);
-        newsong = false;
+    if (pendingSourceVersion !== null) {
+        const requestVersion = pendingSourceVersion;
+        pendingSourceVersion = null;
+        loadAudioSource(currentSource, requestVersion);
     }
 
     if (soundReady && waveformReady && waveformData && !waveformData.soundStarted && !stopbutton.userData.clicked) {
         waveformReady = false;
-        waveformData.sound.play();
+        sound.play();
         waveformData.startTime = listener.context.currentTime;
         waveformData.soundStarted = true;
         
@@ -1040,25 +1122,11 @@ function playmusic() {
         }
     }
     
-    // EXACT SAME waveform animation from first code
-    if (waveformData && waveformData.soundStarted && !stopbutton.userData.clicked) {
+    if (waveformData && waveformData.soundStarted && !waveformData.isStatic && !stopbutton.userData.clicked) {
         const currentTime = listener.context.currentTime;
         const elapsed = currentTime - waveformData.startTime;
-        
-        if (elapsed >= waveformData.duration) {
-            waveformData.sound.stop();
-            waveformData.sound.play();
-            waveformData.startTime = listener.context.currentTime;
-            
-            if (currentPlayingButton && !currentPlayingButton.userData.pressed) {
-                currentPlayingButton.userData.pressed = true;
-                currentPlayingButton.userData.isAnimating = true;
-                currentPlayingButton.userData.animationStart = Date.now();
-                currentPlayingButton.userData.originalY = buttonPositions[currentPlayingButton.userData.name];
-            }
-        }
-        
-        const progressRatio = elapsed / waveformData.duration;
+        const playbackElapsed = elapsed * sound.getPlaybackRate();
+        const progressRatio = (playbackElapsed % waveformData.duration) / waveformData.duration;
         const offset = progressRatio * waveformData.totalWidth;
         waveformData.line.position.x = -offset;
         waveformData.line.material.uniforms.linePositionX.value = waveformData.line.position.x;
