@@ -1,9 +1,9 @@
 const FUNDAMENTAL_HZ = 220;
-const MAX_HZ = 10000;
+const MAX_HZ = 20000;
 const OUTPUT_LEVEL = 0.35;
 const BUFFER_CYCLES = 220;
 const DISPLAY_CYCLES = 4;
-const NOISE_DISPLAY_SAMPLES = 1024;
+const NOISE_DISPLAY_SAMPLES = 2048;
 
 export const PROCEDURAL_SIGNALS = Object.freeze({
     sine: Object.freeze({ id: 'sine', periodic: true }),

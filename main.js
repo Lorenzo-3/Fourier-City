@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { PointerLockControls } from 'three/examples/jsm/controls/PointerLockControls.js';
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
-import { initializeLore, updateLore } from './lore.js';
+import { initializeLore, updateLore, computeFilterMultipliers, getBandCenterFrequency } from './lore.js';
 import { createProceduralSignal, PROCEDURAL_SIGNALS } from './procedural-signals.js';
 
 // ============================================================
@@ -12,11 +12,12 @@ renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setPixelRatio(window.devicePixelRatio);
 renderer.setClearColor(0x000000);
 renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.shadowMap.type = THREE.BasicShadowMap;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.0;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.physicallyCorrectLights = true;
+
 document.body.appendChild(renderer.domElement);
 
 const PLAYER_EYE_HEIGHT = 2.3;
@@ -125,21 +126,13 @@ function updateAllMaterialEnvMaps(envMap) {
 }
 
 // Directional light (with shadows)
-const dirLight = new THREE.DirectionalLight(0xfff5e6, 1.2);
+const dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
 dirLight.position.set(10, 20, 5);
 dirLight.castShadow = true;
 dirLight.shadow.mapSize.width = 4096;
 dirLight.shadow.mapSize.height = 4096;
-dirLight.shadow.camera.near = 0.5;
-dirLight.shadow.camera.far = 50;
-dirLight.shadow.camera.left = -20;
-dirLight.shadow.camera.right = 20;
-dirLight.shadow.camera.top = 20;
-dirLight.shadow.camera.bottom = -20;
-scene.add(dirLight);
 
-const helper = new THREE.DirectionalLightHelper(dirLight);
-scene.add(helper);
+scene.add(dirLight);
 
 // Camera and listener
 const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
@@ -636,6 +629,101 @@ function getClickedObject(event) {
   return null;
 }
 
+// ============================================================
+// FREQUENCY RESPONSE RED LINE + CUTOFF INDICATOR SPHERE
+// ============================================================
+let frequencyResponseLine = null;
+let cutoffIndicatorSphere = null;
+
+function createFrequencyResponseLine() {
+  const geometry = new THREE.BufferGeometry();
+  const material = new THREE.LineBasicMaterial({
+    color: 0xff0000,
+    depthTest: false,
+    depthWrite: false
+  });
+  const line = new THREE.Line(geometry, material);
+  line.visible = false;
+  scene.add(line);
+
+  // Create the yellow sphere that marks the cutoff frequency
+  const sphereGeom = new THREE.SphereGeometry(1, 16, 16);
+  const sphereMat = new THREE.MeshBasicMaterial({
+    color: 0xffff00,
+    depthTest: false,
+    depthWrite: false
+  });
+  cutoffIndicatorSphere = new THREE.Mesh(sphereGeom, sphereMat);
+  cutoffIndicatorSphere.visible = false;
+  scene.add(cutoffIndicatorSphere);
+
+  return line;
+}
+
+function updateFrequencyResponseLine() {
+  if (!frequencyResponseLine) return;
+
+  if (!activeFilter || !filtersInitialized) {
+    frequencyResponseLine.visible = false;
+    if (cutoffIndicatorSphere) cutoffIndicatorSphere.visible = false;
+    return;
+  }
+
+  const lore = window.__fourierCityLore;
+  if (!lore || !lore.buildings) {
+    frequencyResponseLine.visible = false;
+    if (cutoffIndicatorSphere) cutoffIndicatorSphere.visible = false;
+    return;
+  }
+
+  const multipliers = computeFilterMultipliers();
+  const numPoints = multipliers.length;
+
+  // === FIXED dB RANGE – visual scale never changes ===
+  const FIXED_MIN_DB = -48;
+  const FIXED_MAX_DB = 12;
+  const dbRange = FIXED_MAX_DB - FIXED_MIN_DB;
+
+  const buildings = lore.buildings;
+  const positions = new Float32Array(numPoints * 3);
+  const visualMinY = 0.6;
+  const visualMaxY = 30;
+
+  for (let i = 0; i < numPoints; i++) {
+    const building = buildings[i];
+    const mag = multipliers[i];
+    const db = mag > 0 ? 20 * Math.log10(mag) : -60;
+
+    const t = THREE.MathUtils.clamp((db - FIXED_MIN_DB) / dbRange, 0, 1);
+    const y = visualMinY + t * (visualMaxY - visualMinY);
+
+    positions[i * 3] = building.position.x;
+    positions[i * 3 + 1] = y;
+    positions[i * 3 + 2] = building.position.z;
+  }
+
+  frequencyResponseLine.geometry.dispose();
+  frequencyResponseLine.geometry = new THREE.BufferGeometry();
+  frequencyResponseLine.geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  frequencyResponseLine.visible = true;
+
+  // --- Place the cutoff indicator sphere (directly mapped to knob value) ---
+  if (cutoffIndicatorSphere && cutoffknob) {
+    const cutoffValue = cutoffknob.userData.value;
+    const nearestIndex = Math.round(cutoffValue * (numPoints - 1));
+
+    const building = buildings[nearestIndex];
+    cutoffIndicatorSphere.position.set(
+      building.position.x,
+      positions[nearestIndex * 3 + 1],   // y from the line
+      building.position.z
+    );
+    cutoffIndicatorSphere.visible = true;
+  } else {
+    if (cutoffIndicatorSphere) cutoffIndicatorSphere.visible = false;
+  }
+}
+
 function handleClickedObject(clickedObject) {
   if (clickedObject.userData.name === 'Stop/Resume') {
     togglePauseResume();
@@ -652,6 +740,8 @@ function handleClickedObject(clickedObject) {
       currentFilterButton = null;
       activeFilter = null;
       rewireAudioGraph();
+      updateGlobalFilterState();
+      updateFrequencyResponseLine();
     } else {
       if (currentFilterButton) {
         currentFilterButton.userData.pressed = false;
@@ -663,8 +753,10 @@ function handleClickedObject(clickedObject) {
       currentFilterButton = clickedObject;
       activeFilter = clickedObject.userData.name.toLowerCase();
       applyActiveFilterParameters();
+      updateGlobalFilterState();
       animateClick(clickedObject);
       rewireAudioGraph();
+      updateFrequencyResponseLine();
     }
   } else if (clickedObject !== currentPlayingButton) {
     stopCurrentPlayback();
@@ -785,9 +877,9 @@ function createKnobMesh(position, name, initialValue, minValue, maxValue) {
     metalness: 0.7
   });
   const materials = [
-    new THREE.MeshStandardMaterial({ color: 0x888888, roughness: 0.5, metalness: 0.3 }), // side
-    topMaterial, // top
-    new THREE.MeshStandardMaterial({ color: 0x444444, roughness: 0.7, metalness: 0.2 })  // bottom
+    new THREE.MeshStandardMaterial({ color: 0x888888, roughness: 0.5, metalness: 0.3 }),
+    topMaterial,
+    new THREE.MeshStandardMaterial({ color: 0x444444, roughness: 0.7, metalness: 0.2 })
   ];
 
   const knob = new THREE.Mesh(knobGeometry, materials);
@@ -836,6 +928,17 @@ function createKnobMesh(position, name, initialValue, minValue, maxValue) {
   scene.add(knob);
   knobObjects.push(knob);
   return knob;
+}
+
+function updateGlobalFilterState() {
+  const state = window.__fourierCityLore;
+  if (!state) return;
+  state.filterState = {
+    type: activeFilter,
+    cutoff: cutoffknob.userData.value,
+    gain: gainknob.userData.value,
+    resonance: resonanceknob.userData.value
+  };
 }
 
 // Button creation with improved shading
@@ -997,7 +1100,7 @@ const peakingbutton = createButton(
 const pitchknob = createKnobMesh(new THREE.Vector3(0.0, 1.24, 1.3), 'pitchknob', 0.5, 0.5, 1.5);
 const cutoffknob = createKnobMesh(new THREE.Vector3(-0.3, 1.24, 1.05), 'cutoffknob', 0.5, 20, 20000);
 const gainknob = createKnobMesh(new THREE.Vector3(0.0, 1.24, 1.05), 'gainknob', 0.5, -18, 18);
-const resonanceknob = createKnobMesh(new THREE.Vector3(0.3, 1.24, 1.05), 'resonanceknob', 0.5, 0.1, 20);
+const resonanceknob = createKnobMesh(new THREE.Vector3(0.3, 1.24, 1.05), 'resonanceknob', 0.1, 0.1, 20);
 
 function updateFilterParameter(knobName, value) {
   if (!filtersInitialized) return;
@@ -1214,6 +1317,8 @@ function onPointerLockMove(event) {
     activeKnob.rotation.y = rotationAngle;
     updateFilterParameter(activeKnob.userData.name, activeKnob.userData.value);
     updateKnobValueDisplay(activeKnob);
+    updateGlobalFilterState();
+    updateFrequencyResponseLine();
     event.stopPropagation();
   }
 }
@@ -1228,6 +1333,8 @@ window.addEventListener('mousemove', (event) => {
     activeKnob.rotation.y = rotationAngle;
     updateFilterParameter(activeKnob.userData.name, activeKnob.userData.value);
     updateKnobValueDisplay(activeKnob);
+    updateGlobalFilterState();
+    updateFrequencyResponseLine();
     previousMouseY = event.clientY;
   }
 });
@@ -1285,6 +1392,11 @@ window.addEventListener('keyup', (event) => {
   }
 });
 
+// ============================================================
+// INITIALIZATION & ANIMATE
+// ============================================================
+frequencyResponseLine = createFrequencyResponseLine();
+
 function animate() {
   requestAnimationFrame(animate);
   const now = performance.now();
@@ -1296,7 +1408,11 @@ function animate() {
   clickanimation();
   updateLore();
 
+  // Red response line + cutoff sphere now clearly show filter effects
+  updateFrequencyResponseLine();
+
   renderer.render(scene, camera);
 }
+updateGlobalFilterState();
 
 animate();

@@ -232,7 +232,6 @@ function ensureGroundFlow(scene) {
         if (state.groundFlow.parent !== scene) {
             scene.add(state.groundFlow);
         }
-
         return;
     }
 
@@ -311,7 +310,6 @@ function createGroundFlowMaterial(energyTexture) {
         },
         vertexShader: `
             varying vec3 vWorldPosition;
-
             void main() {
                 vec4 worldPosition = modelMatrix * vec4(position, 1.0);
                 vWorldPosition = worldPosition.xyz;
@@ -320,7 +318,6 @@ function createGroundFlowMaterial(energyTexture) {
         `,
         fragmentShader: `
             precision mediump float;
-
             uniform sampler2D uEnergyMap;
             uniform float uTime;
             uniform float uStartAngle;
@@ -335,20 +332,14 @@ function createGroundFlowMaterial(energyTexture) {
             uniform float uVoronoiMusicBoost;
             uniform float uVoronoiSpecularSharpness;
             uniform float uVoronoiEdgeFade;
-
             varying vec3 vWorldPosition;
 
             const float TWO_PI = 6.28318530718;
 
-            float saturate(float value) {
-                return clamp(value, 0.0, 1.0);
-            }
+            float saturate(float value) { return clamp(value, 0.0, 1.0); }
 
             vec2 hash22(vec2 point) {
-                vec2 hashed = vec2(
-                    dot(point, vec2(127.1, 311.7)),
-                    dot(point, vec2(269.5, 183.3))
-                );
+                vec2 hashed = vec2(dot(point, vec2(127.1, 311.7)), dot(point, vec2(269.5, 183.3)));
                 return fract(sin(hashed) * 43758.5453);
             }
 
@@ -358,13 +349,11 @@ function createGroundFlowMaterial(energyTexture) {
                 float closestDistance = 8.0;
                 float secondDistance = 8.0;
                 vec2 closestCell = vec2(0.0);
-
                 for (int y = -1; y <= 1; y++) {
                     for (int x = -1; x <= 1; x++) {
                         vec2 offset = vec2(float(x), float(y));
                         vec2 featurePoint = offset + hash22(cell + offset);
                         float distanceToPoint = length(featurePoint - localPoint);
-
                         if (distanceToPoint < closestDistance) {
                             secondDistance = closestDistance;
                             closestDistance = distanceToPoint;
@@ -374,7 +363,6 @@ function createGroundFlowMaterial(energyTexture) {
                         }
                     }
                 }
-
                 return vec3(closestDistance, secondDistance - closestDistance, hash22(closestCell).x);
             }
 
@@ -403,74 +391,41 @@ function createGroundFlowMaterial(energyTexture) {
                 float idleFan = flowMask * (0.01 + uOverallEnergy * 0.07);
 
                 float sourceGlow = (1.0 - smoothstep(0.0, 22.0, radius)) * (0.07 + 0.46 * uOverallEnergy);
-                float skylineContact = bandEnergy
-                    * flowMask
-                    * smoothstep(uOuterRadius - 38.0, uOuterRadius - 6.0, radius)
-                    * (1.0 - smoothstep(uOuterRadius - 6.0, uOuterRadius + 5.0, radius))
-                    * 0.42;
+                float skylineContact = bandEnergy * flowMask *
+                    smoothstep(uOuterRadius - 38.0, uOuterRadius - 6.0, radius) *
+                    (1.0 - smoothstep(uOuterRadius - 6.0, uOuterRadius + 5.0, radius)) * 0.42;
                 float intensity = sourceGlow + activeFan * 0.9 + idleFan + skylineContact;
 
                 vec3 voronoi = getVoronoiData(groundPosition / uVoronoiCellSize);
                 float cellEdge = 1.0 - smoothstep(0.025, 0.18, voronoi.y);
-                float cellInterior = smoothstep(0.08, 0.72, voronoi.x)
-                    * (1.0 - smoothstep(0.72, 1.12, voronoi.x));
+                float cellInterior = smoothstep(0.08, 0.72, voronoi.x) * (1.0 - smoothstep(0.72, 1.12, voronoi.x));
                 float facetAngle = voronoi.z * TWO_PI + sin(uTime * 0.12 + voronoi.z * 9.0) * 0.22;
-                vec3 facetNormal = normalize(vec3(
-                    cos(facetAngle) * 0.30,
-                    1.0,
-                    sin(facetAngle) * 0.30
-                ));
+                vec3 facetNormal = normalize(vec3(cos(facetAngle) * 0.30, 1.0, sin(facetAngle) * 0.30));
                 vec3 viewDirection = normalize(cameraPosition - vWorldPosition);
                 vec3 lightDirection = normalize(vec3(0.34, 0.92, -0.20));
                 vec3 halfDirection = normalize(viewDirection + lightDirection);
-                float specular = pow(
-                    max(dot(facetNormal, halfDirection), 0.0),
-                    uVoronoiSpecularSharpness
-                );
+                float specular = pow(max(dot(facetNormal, halfDirection), 0.0), uVoronoiSpecularSharpness);
                 float fresnel = pow(1.0 - saturate(dot(facetNormal, viewDirection)), 2.0);
-                float movingGlint = 0.55 + 0.45 * sin(
-                    dot(groundPosition, vec2(0.035, -0.027)) - uTime * 0.32 + voronoi.z * 7.0
-                );
+                float movingGlint = 0.55 + 0.45 * sin(dot(groundPosition, vec2(0.035, -0.027)) - uTime * 0.32 + voronoi.z * 7.0);
                 float cellVariation = 0.78 + voronoi.z * 0.30;
-                float glassPattern = cellInterior * (0.30 + specular * 1.9 + fresnel * 0.42)
-                    + cellEdge * (0.22 + specular * 0.68);
+                float glassPattern = cellInterior * (0.30 + specular * 1.9 + fresnel * 0.42) + cellEdge * (0.22 + specular * 0.68);
                 glassPattern *= cellVariation;
                 glassPattern *= 0.72 + movingGlint * 0.28;
 
                 float squareDistance = max(abs(groundPosition.x), abs(groundPosition.y));
-                float groundEdgeMask = 1.0 - smoothstep(
-                    uGroundHalfSize - uVoronoiEdgeFade,
-                    uGroundHalfSize,
-                    squareDistance
-                );
-                float voronoiStrength = (
-                    uVoronoiIdleIntensity
-                    + uOverallEnergy * uVoronoiMusicBoost
-                    + bandEnergy * flowMask * 0.26
-                ) * groundEdgeMask;
+                float groundEdgeMask = 1.0 - smoothstep(uGroundHalfSize - uVoronoiEdgeFade, uGroundHalfSize, squareDistance);
+                float voronoiStrength = (uVoronoiIdleIntensity + uOverallEnergy * uVoronoiMusicBoost + bandEnergy * flowMask * 0.26) * groundEdgeMask;
                 float voronoiIntensity = glassPattern * voronoiStrength;
 
-                if (intensity + voronoiIntensity < 0.004) {
-                    discard;
-                }
+                if (intensity + voronoiIntensity < 0.004) discard;
 
                 vec3 whiteHot = vec3(1.0, 1.0, 0.92);
                 vec3 silver = vec3(0.78, 0.86, 0.94);
-                vec3 color = mix(
-                    bandColor * 0.28,
-                    bandColor,
-                    saturate(activeFan * 1.6 + uOverallEnergy * 0.28)
-                );
+                vec3 color = mix(bandColor * 0.28, bandColor, saturate(activeFan * 1.6 + uOverallEnergy * 0.28));
                 color = mix(color, whiteHot, saturate(sourceGlow * 2.0 + bandEnergy * 0.05));
-                vec3 voronoiColor = mix(
-                    silver,
-                    bandColor * 1.16,
-                    flowMask * saturate(0.20 + bandEnergy * 0.92)
-                );
-                vec3 combinedColor = color * (0.82 + intensity * 0.9)
-                    + voronoiColor * voronoiIntensity;
+                vec3 voronoiColor = mix(silver, bandColor * 1.16, flowMask * saturate(0.20 + bandEnergy * 0.92));
+                vec3 combinedColor = color * (0.82 + intensity * 0.9) + voronoiColor * voronoiIntensity;
                 float combinedAlpha = saturate(intensity * 0.78 + voronoiIntensity * 0.92);
-
                 gl_FragColor = vec4(combinedColor, combinedAlpha);
             }
         `,
@@ -488,16 +443,12 @@ async function ensureSkyline(scene) {
         if (state.skyline.parent !== scene) {
             scene.add(state.skyline);
         }
-
         return;
     }
 
-    if (state.skylineLoading) {
-        return;
-    }
+    if (state.skylineLoading) return;
 
     state.skylineLoading = true;
-
     try {
         const loader = new OBJLoader();
         const [model, objText] = await Promise.all([
@@ -508,7 +459,6 @@ async function ensureSkyline(scene) {
         const geometry = buildInstancedGeometry(model, normalizeMatrix);
         const wireframeGeometry = buildQuadWireframeGeometry(objText, normalizeMatrix);
         const skyline = buildSkyline(geometry, wireframeGeometry);
-
         state.skyline = skyline;
         scene.add(skyline);
     } catch (error) {
@@ -527,7 +477,6 @@ function loadText(url) {
 function getNormalizeMatrix(model) {
     model.rotation.y = THREE.MathUtils.degToRad(CONFIG.modelYawCorrectionDegrees);
     model.updateMatrixWorld(true);
-
     const box = new THREE.Box3().setFromObject(model);
     const center = box.getCenter(new THREE.Vector3());
     return new THREE.Matrix4().makeTranslation(-center.x, -box.min.y, -center.z);
@@ -535,7 +484,6 @@ function getNormalizeMatrix(model) {
 
 function buildInstancedGeometry(model, normalizeMatrix) {
     const geometries = [];
-
     model.traverse((child) => {
         if (child instanceof THREE.Mesh) {
             const geometry = child.geometry.clone();
@@ -544,20 +492,11 @@ function buildInstancedGeometry(model, normalizeMatrix) {
             geometries.push(geometry);
         }
     });
-
-    if (!geometries.length) {
-        throw new Error('No mesh geometry found in skyscraper.obj');
-    }
-
+    if (!geometries.length) throw new Error('No mesh geometry found in skyscraper.obj');
     const mergedGeometry = geometries.length === 1 ? geometries[0] : mergeGeometries(geometries, false);
-
-    if (!mergedGeometry) {
-        throw new Error('Unable to merge skyscraper geometry');
-    }
-
+    if (!mergedGeometry) throw new Error('Unable to merge skyscraper geometry');
     mergedGeometry.computeBoundingBox();
     mergedGeometry.computeBoundingSphere();
-
     return mergedGeometry;
 }
 
@@ -579,18 +518,14 @@ function buildQuadWireframeGeometry(objText, normalizeMatrix) {
                 const rawIndex = Number(part.split('/')[0]);
                 return rawIndex > 0 ? rawIndex - 1 : vertices.length + rawIndex;
             });
-
-            for (let index = 0; index < face.length; index += 1) {
+            for (let index = 0; index < face.length; index++) {
                 const a = face[index];
                 const b = face[(index + 1) % face.length];
                 const key = a < b ? `${a}/${b}` : `${b}/${a}`;
-
                 if (!uniqueEdges.has(key)) {
                     uniqueEdges.add(key);
-                    point.copy(vertices[a]);
-                    positions.push(point.x, point.y, point.z);
-                    point.copy(vertices[b]);
-                    positions.push(point.x, point.y, point.z);
+                    point.copy(vertices[a]); positions.push(point.x, point.y, point.z);
+                    point.copy(vertices[b]); positions.push(point.x, point.y, point.z);
                 }
             }
         }
@@ -600,7 +535,6 @@ function buildQuadWireframeGeometry(objText, normalizeMatrix) {
     geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(positions), 3));
     geometry.computeBoundingBox();
     geometry.computeBoundingSphere();
-
     return geometry;
 }
 
@@ -609,11 +543,10 @@ function buildSkyline(geometry, wireframeGeometry) {
     skyline.name = 'AudioReactiveSkyline';
 
     const solidMaterial = new THREE.MeshStandardMaterial({
-        color: 0x111111,          // dark glossy base
-        roughness: 0.3,           // matches table / buttons
-        metalness: 0.1, 
+        color: 0x111111,
+        roughness: 0.3,
+        metalness: 0.1,
         emissive: CONFIG.solidEmissiveColor
-
     });
     const wireframeMaterial = new LineMaterial({
         color: 0xffffff,
@@ -649,7 +582,7 @@ function buildSkyline(geometry, wireframeGeometry) {
     solidInstances.renderOrder = 10;
     wireframeLines.renderOrder = 11;
 
-    for (let index = 0; index < CONFIG.buildingCount; index += 1) {
+    for (let index = 0; index < CONFIG.buildingCount; index++) {
         const angle = startAngle + step * index;
         const restHeight = 0.06;
         const position = new THREE.Vector3(
@@ -657,12 +590,10 @@ function buildSkyline(geometry, wireframeGeometry) {
             0,
             Math.cos(angle) * CONFIG.radius
         );
-
         INSTANCE_ORIENTER.position.copy(position);
         INSTANCE_ORIENTER.lookAt(INSTANCE_CENTER);
         INSTANCE_SCALE.set(CONFIG.modelScale, CONFIG.modelScale * restHeight, CONFIG.modelScale);
         INSTANCE_MATRIX.compose(position, INSTANCE_ORIENTER.quaternion, INSTANCE_SCALE);
-
         solidInstances.setMatrixAt(index, INSTANCE_MATRIX);
         state.currentScales[index] = INSTANCE_SCALE.y;
         state.buildings.push({
@@ -677,7 +608,6 @@ function buildSkyline(geometry, wireframeGeometry) {
     syncWireframeResolution();
     syncWireframePositions();
     skyline.add(solidInstances, wireframeLines);
-
     return skyline;
 }
 
@@ -690,14 +620,13 @@ function buildSkylineWireframe(wireframeGeometry, material) {
     const lineGeometry = new LineSegmentsGeometry();
     const line = new LineSegments2(lineGeometry, material);
 
-    for (let buildingIndex = 0; buildingIndex < CONFIG.buildingCount; buildingIndex += 1) {
+    for (let buildingIndex = 0; buildingIndex < CONFIG.buildingCount; buildingIndex++) {
         const angle = getBuildingAngle(buildingIndex);
         const position = new THREE.Vector3(
             Math.sin(angle) * CONFIG.radius,
             0,
             Math.cos(angle) * CONFIG.radius
         );
-
         INSTANCE_ORIENTER.position.copy(position);
         INSTANCE_ORIENTER.lookAt(INSTANCE_CENTER);
         const colorOffset = buildingIndex * 3;
@@ -705,18 +634,16 @@ function buildSkylineWireframe(wireframeGeometry, material) {
         const green = state.baseBuildingColors[colorOffset + 1] * CONFIG.wireframeIdleBrightness;
         const blue = state.baseBuildingColors[colorOffset + 2] * CONFIG.wireframeIdleBrightness;
 
-        for (let vertexIndex = 0; vertexIndex < sourceCount; vertexIndex += 1) {
+        for (let vertexIndex = 0; vertexIndex < sourceCount; vertexIndex++) {
             const sourceOffset = vertexIndex * 3;
             const targetIndex = buildingIndex * sourceCount + vertexIndex;
             const targetOffset = targetIndex * 3;
             const localY = sourcePositions.array[sourceOffset + 1];
-
             WIREFRAME_POINT.set(
                 sourcePositions.array[sourceOffset] * CONFIG.modelScale * CONFIG.wireframeSurfaceScale,
                 0,
                 sourcePositions.array[sourceOffset + 2] * CONFIG.modelScale * CONFIG.wireframeSurfaceScale
             ).applyQuaternion(INSTANCE_ORIENTER.quaternion);
-
             positions[targetOffset] = position.x + WIREFRAME_POINT.x;
             positions[targetOffset + 1] = localY * CONFIG.modelScale * 0.06;
             positions[targetOffset + 2] = position.z + WIREFRAME_POINT.z;
@@ -729,7 +656,6 @@ function buildSkylineWireframe(wireframeGeometry, material) {
 
     lineGeometry.setPositions(positions);
     lineGeometry.setColors(colors);
-
     return {
         lines: line,
         positions,
@@ -744,7 +670,6 @@ function getBuildingAngle(index) {
     const startAngle = getArcStartAngle();
     const arcRadians = getArcRadians();
     const step = -arcRadians / (CONFIG.buildingCount - 1);
-
     return startAngle + step * index;
 }
 
@@ -758,69 +683,112 @@ function getArcStartAngle() {
     return CONFIG.gapCenterRadians - gapRadians / 2;
 }
 
-function updateSkyline() {
-    if (!state.buildings.length || !state.solidInstances || !state.wireframeLines) {
-        return;
+// ==========================================================================
+// EXPORT: getBandCenterFrequency
+// ==========================================================================
+export function getBandCenterFrequency(index) {
+    const minFreq = CONFIG.minHz;
+    const maxFreq = CONFIG.maxHz;
+    const ratio = Math.pow(maxFreq / minFreq, 1 / (CONFIG.buildingCount - 1));
+    return minFreq * Math.pow(ratio, index + 0.5);
+}
+
+// ==========================================================================
+// EXPORT: computeFilterMultipliers (now used only for the red response line)
+// ==========================================================================
+export function computeFilterMultipliers() {
+    const fp = window.__fourierCityLore?.filterState;
+    const multipliers = new Float32Array(CONFIG.buildingCount).fill(1);
+    if (!fp || !fp.type) return multipliers;   // no filter active
+
+    const minFreq = 20;
+    const maxFreq = 20000;
+    const fc = Math.exp(Math.log(minFreq) + fp.cutoff * (Math.log(maxFreq) - Math.log(minFreq)));
+    const Q = 0.1 + fp.resonance * 19.9;
+    const gainDB = -18 + fp.gain * 36;
+    const A = Math.pow(10, gainDB / 40);
+
+    for (let i = 0; i < CONFIG.buildingCount; i++) {
+        const f = getBandCenterFrequency(i);
+        const w = f / fc;
+
+        let mag = 1;
+        switch (fp.type) {
+            case 'lowpass':
+                mag = 1 / Math.sqrt((1 - w * w) * (1 - w * w) + (w / Q) * (w / Q));
+                break;
+            case 'highpass':
+                mag = (w * w) / Math.sqrt((1 - w * w) * (1 - w * w) + (w / Q) * (w / Q));
+                break;
+            case 'bandpass':
+                mag = (w / Q) / Math.sqrt((1 - w * w) * (1 - w * w) + (w / Q) * (w / Q));
+                break;
+            case 'peaking':
+                const num = (1 - w * w) * (1 - w * w) + (w * A / Q) * (w * A / Q);
+                const den = (1 - w * w) * (1 - w * w) + (w / (A * Q)) * (w / (A * Q));
+                mag = Math.sqrt(num / den);
+                break;
+            default:
+                mag = 1;
+        }
+        multipliers[i] = Math.max(0, Math.min(mag, 10));
     }
+    return multipliers;
+}
+
+// ==========================================================================
+// MODIFIED: updateSkyline uses the unfiltered analyser energies only
+// (the analyser already “sees” the effect of the active filter)
+// ==========================================================================
+function updateSkyline() {
+    if (!state.buildings.length || !state.solidInstances || !state.wireframeLines) return;
 
     const now = performance.now();
     const minUpdateIntervalMs = 1000 / CONFIG.skylineUpdateFps;
-
-    if (now - state.lastUpdateMs < minUpdateIntervalMs) {
-        return;
-    }
+    if (now - state.lastUpdateMs < minUpdateIntervalMs) return;
 
     const deltaSeconds = Math.min((now - state.lastUpdateMs) / 1000, 0.08);
     state.lastUpdateMs = now;
 
     const energies = readFrequencyBandEnergies();
-    updateGroundFlow(energies, deltaSeconds);
 
-    for (let index = 0; index < state.buildings.length; index += 1) {
+    for (let index = 0; index < state.buildings.length; index++) {
         const building = state.buildings[index];
         const energy = energies[index] ?? 0;
-        const targetScale = CONFIG.modelScale * (
-            building.restHeight + energy * CONFIG.heightBoost
-        );
+        const targetScale = CONFIG.modelScale * (building.restHeight + energy * CONFIG.heightBoost);
         const currentScale = state.currentScales[index] || CONFIG.modelScale * building.restHeight;
         const rate = targetScale > currentScale ? CONFIG.attack : CONFIG.decay;
         const blend = 1 - Math.exp(-rate * deltaSeconds);
         const nextScale = THREE.MathUtils.lerp(currentScale, targetScale, blend);
-
         state.currentScales[index] = nextScale;
         INSTANCE_SCALE.set(CONFIG.modelScale, nextScale, CONFIG.modelScale);
         INSTANCE_MATRIX.compose(building.position, building.quaternion, INSTANCE_SCALE);
         state.solidInstances.setMatrixAt(index, INSTANCE_MATRIX);
     }
-
     state.solidInstances.instanceMatrix.needsUpdate = true;
     syncWireframeResolution();
     syncWireframePositions();
     syncWireframeColors();
+    updateGroundFlow(energies, deltaSeconds);
 }
 
 function updateGroundFlow(energies, deltaSeconds) {
-    if (!state.groundFlowMaterial || !state.groundFlowEnergyTexture || !state.groundFlowEnergyData) {
-        return;
-    }
+    if (!state.groundFlowMaterial || !state.groundFlowEnergyTexture || !state.groundFlowEnergyData) return;
 
     const data = state.groundFlowEnergyData;
     let peakEnergy = 0;
     let summedEnergy = 0;
 
-    for (let index = 0; index < CONFIG.buildingCount; index += 1) {
+    for (let index = 0; index < CONFIG.buildingCount; index++) {
         const shapedEnergy = Math.pow(
             THREE.MathUtils.clamp(energies[index] ?? 0, 0, 1),
             CONFIG.groundFlowEnergyExponent
         );
         const offset = index * 4;
         const currentEnergy = data[offset + 3] / 255;
-        const rate = shapedEnergy > currentEnergy
-            ? CONFIG.groundFlowAttack
-            : CONFIG.groundFlowDecay;
+        const rate = shapedEnergy > currentEnergy ? CONFIG.groundFlowAttack : CONFIG.groundFlowDecay;
         const blend = 1 - Math.exp(-rate * deltaSeconds);
         const nextEnergy = THREE.MathUtils.lerp(currentEnergy, shapedEnergy, blend);
-
         data[offset + 3] = Math.round(nextEnergy * 255);
         peakEnergy = Math.max(peakEnergy, nextEnergy);
         summedEnergy += nextEnergy;
@@ -830,19 +798,14 @@ function updateGroundFlow(energies, deltaSeconds) {
 
     const averageEnergy = summedEnergy / CONFIG.buildingCount;
     const targetOverallEnergy = Math.min(
-        peakEnergy * CONFIG.groundFlowPeakWeight
-            + averageEnergy * CONFIG.groundFlowAverageWeight,
+        peakEnergy * CONFIG.groundFlowPeakWeight + averageEnergy * CONFIG.groundFlowAverageWeight,
         1
     );
     const groundFlowRate = targetOverallEnergy > state.groundFlowOverallEnergy
-        ? CONFIG.groundFlowAttack
-        : CONFIG.groundFlowDecay;
+        ? CONFIG.groundFlowAttack : CONFIG.groundFlowDecay;
     const blend = 1 - Math.exp(-groundFlowRate * deltaSeconds);
-
     state.groundFlowOverallEnergy = THREE.MathUtils.lerp(
-        state.groundFlowOverallEnergy,
-        targetOverallEnergy,
-        blend
+        state.groundFlowOverallEnergy, targetOverallEnergy, blend
     );
     state.groundFlowMaterial.uniforms.uTime.value = performance.now() / 1000;
     state.groundFlowMaterial.uniforms.uOverallEnergy.value = state.groundFlowOverallEnergy;
@@ -850,34 +813,21 @@ function updateGroundFlow(energies, deltaSeconds) {
 
 function syncWireframeResolution() {
     const material = state.wireframeMaterial;
-
-    if (!material?.resolution) {
-        return;
-    }
-
+    if (!material?.resolution) return;
     const pixelRatio = window.devicePixelRatio || 1;
-    material.resolution.set(
-        window.innerWidth * pixelRatio,
-        window.innerHeight * pixelRatio
-    );
+    material.resolution.set(window.innerWidth * pixelRatio, window.innerHeight * pixelRatio);
 }
 
 function syncWireframePositions() {
     const positions = state.wireframePositions;
     const lineBuffer = state.wireframeLineBuffer;
     const yFactors = state.wireframeYFactors;
-
-    if (!positions || !lineBuffer || !yFactors) {
-        return;
-    }
-
+    if (!positions || !lineBuffer || !yFactors) return;
     const verticesPerBuilding = yFactors.length / CONFIG.buildingCount;
-
-    for (let index = 0; index < yFactors.length; index += 1) {
+    for (let index = 0; index < yFactors.length; index++) {
         const buildingIndex = Math.floor(index / verticesPerBuilding);
         positions[index * 3 + 1] = yFactors[index] * state.currentScales[buildingIndex];
     }
-
     lineBuffer.needsUpdate = true;
 }
 
@@ -885,43 +835,31 @@ function syncWireframeColors() {
     const colors = state.wireframeColors;
     const colorBuffer = state.wireframeColorBuffer;
     const yFactors = state.wireframeYFactors;
-
-    if (!colors || !colorBuffer || !yFactors) {
-        return;
-    }
-
+    if (!colors || !colorBuffer || !yFactors) return;
     const verticesPerBuilding = yFactors.length / CONFIG.buildingCount;
-
-    for (let index = 0; index < yFactors.length; index += 1) {
+    for (let index = 0; index < yFactors.length; index++) {
         const buildingIndex = Math.floor(index / verticesPerBuilding);
         const building = state.buildings[buildingIndex];
         const buildingColorOffset = buildingIndex * 3;
         const colorOffset = index * 3;
         const visualEnergy = THREE.MathUtils.clamp(
-            (state.currentScales[buildingIndex] / CONFIG.modelScale - building.restHeight)
-                / CONFIG.heightBoost,
-            0,
-            1
+            (state.currentScales[buildingIndex] / CONFIG.modelScale - building.restHeight) / CONFIG.heightBoost,
+            0, 1
         );
-        const brightness = CONFIG.wireframeIdleBrightness
-            + CONFIG.wireframeEnergyBrightness * visualEnergy;
-
+        const brightness = CONFIG.wireframeIdleBrightness + CONFIG.wireframeEnergyBrightness * visualEnergy;
         colors[colorOffset] = state.baseBuildingColors[buildingColorOffset] * brightness;
         colors[colorOffset + 1] = state.baseBuildingColors[buildingColorOffset + 1] * brightness;
         colors[colorOffset + 2] = state.baseBuildingColors[buildingColorOffset + 2] * brightness;
     }
-
     colorBuffer.needsUpdate = true;
 }
 
 function buildBaseBuildingColors() {
     const color = new THREE.Color();
-
-    for (let index = 0; index < CONFIG.buildingCount; index += 1) {
+    for (let index = 0; index < CONFIG.buildingCount; index++) {
         const ratio = CONFIG.buildingCount > 1 ? index / (CONFIG.buildingCount - 1) : 0;
         const frequency = CONFIG.minHz * ((CONFIG.maxHz / CONFIG.minHz) ** ratio);
         const offset = index * 3;
-
         sampleSpectrumColor(frequency, color);
         state.baseBuildingColors[offset] = color.r;
         state.baseBuildingColors[offset + 1] = color.g;
@@ -935,11 +873,9 @@ function sampleSpectrumColor(frequency, target) {
         SPECTRUM_COLOR_ANCHORS[0].frequency,
         SPECTRUM_COLOR_ANCHORS[SPECTRUM_COLOR_ANCHORS.length - 1].frequency
     );
-
-    for (let index = 1; index < SPECTRUM_COLOR_ANCHORS.length; index += 1) {
+    for (let index = 1; index < SPECTRUM_COLOR_ANCHORS.length; index++) {
         const lower = SPECTRUM_COLOR_ANCHORS[index - 1];
         const upper = SPECTRUM_COLOR_ANCHORS[index];
-
         if (clampedFrequency <= upper.frequency) {
             const lowerLog = Math.log(lower.frequency);
             const upperLog = Math.log(upper.frequency);
@@ -947,17 +883,14 @@ function sampleSpectrumColor(frequency, target) {
             return target.copy(lower.color).lerp(upper.color, ratio);
         }
     }
-
     return target.copy(SPECTRUM_COLOR_ANCHORS[SPECTRUM_COLOR_ANCHORS.length - 1].color);
 }
 
 function initializeGroundFlowSpectrumData() {
     const data = state.groundFlowEnergyData;
-
-    for (let index = 0; index < CONFIG.buildingCount; index += 1) {
+    for (let index = 0; index < CONFIG.buildingCount; index++) {
         const colorOffset = index * 3;
         const dataOffset = index * 4;
-
         data[dataOffset] = Math.round(state.baseBuildingColors[colorOffset] * 255);
         data[dataOffset + 1] = Math.round(state.baseBuildingColors[colorOffset + 1] * 255);
         data[dataOffset + 2] = Math.round(state.baseBuildingColors[colorOffset + 2] * 255);
@@ -971,74 +904,52 @@ function readFrequencyBandEnergies() {
         state.bandEnergies.fill(0);
         return state.bandEnergies;
     }
-
     state.analyser.analyser.getFloatFrequencyData(state.frequencyDbData);
-
-    for (let bandIndex = 0; bandIndex < state.frequencyBands.length; bandIndex += 1) {
+    for (let bandIndex = 0; bandIndex < state.frequencyBands.length; bandIndex++) {
         const band = state.frequencyBands[bandIndex];
         let decibelSum = 0;
-
-        for (let index = band.startBin; index <= band.endBin; index += 1) {
+        for (let index = band.startBin; index <= band.endBin; index++) {
             decibelSum += state.frequencyDbData[index];
         }
-
-        const averageDecibels = Math.max(
-            decibelSum / band.binCount,
-            CONFIG.analyserMinDecibels
-        );
+        const averageDecibels = Math.max(decibelSum / band.binCount, CONFIG.analyserMinDecibels);
         const rawEnergy = THREE.MathUtils.clamp(
-            (averageDecibels - CONFIG.analyserMinDecibels)
-                / (CONFIG.analyserMaxDecibels - CONFIG.analyserMinDecibels),
-            0,
-            1
+            (averageDecibels - CONFIG.analyserMinDecibels) / (CONFIG.analyserMaxDecibels - CONFIG.analyserMinDecibels),
+            0, 1
         );
-
         state.rawBandDecibels[bandIndex] = averageDecibels;
         state.bandEnergies[bandIndex] = Math.pow(rawEnergy, CONFIG.visualEnergyExponent);
     }
-
     return state.bandEnergies;
 }
 
 function buildLogFrequencyBands(sampleRate, fftSize, frequencyBinCount, bandCount) {
-    // Exact breakpoints from your image (Hz)
     const breakpoints = [20, 40, 80, 160, 300, 600, 1200, 2400, 5000, 10000, 20000];
-    const numRanges = breakpoints.length - 1;  // = 10
+    const numRanges = breakpoints.length - 1;
     const nyquist = sampleRate / 2;
     const hzPerBin = sampleRate / fftSize;
-
-    // Clamp breakpoints to valid frequencies
     const clampedBreakpoints = breakpoints.map(f => Math.min(f, nyquist));
-    
-    // Calculate how many buildings go into each range (roughly proportional to log width)
     const buildingsPerRange = new Array(numRanges).fill(0);
     let remaining = bandCount;
     for (let i = 0; i < numRanges; i++) {
         const lowLog = Math.log(clampedBreakpoints[i]);
-        const highLog = Math.log(clampedBreakpoints[i+1]);
+        const highLog = Math.log(clampedBreakpoints[i + 1]);
         const weight = highLog - lowLog;
         buildingsPerRange[i] = Math.max(1, Math.round(weight * bandCount / (Math.log(nyquist) - Math.log(20))));
         remaining -= buildingsPerRange[i];
     }
-    // Distribute any rounding leftovers
     for (let i = 0; i < remaining; i++) buildingsPerRange[i % numRanges]++;
 
-    // Build band objects for every building
     const bands = [];
     let buildingIdx = 0;
     for (let range = 0; range < numRanges; range++) {
         const lowHz = clampedBreakpoints[range];
-        const highHz = clampedBreakpoints[range+1];
+        const highHz = clampedBreakpoints[range + 1];
         const countInRange = buildingsPerRange[range];
-        
         for (let sub = 0; sub < countInRange; sub++) {
-            // Logarithmic interpolation inside this range
-            const t = sub / countInRange;  // 0..1
+            const t = sub / countInRange;
             const logLow = Math.log(lowHz);
             const logHigh = Math.log(highHz);
             const bandFreq = Math.exp(logLow + t * (logHigh - logLow));
-            
-            // Convert frequency to bin indices
             const startBin = Math.max(1, Math.floor(bandFreq / hzPerBin));
             let endBin;
             if (sub === countInRange - 1) {
@@ -1049,19 +960,13 @@ function buildLogFrequencyBands(sampleRate, fftSize, frequencyBinCount, bandCoun
                 endBin = Math.max(startBin, Math.floor(nextBandFreq / hzPerBin) - 1);
             }
             endBin = Math.min(endBin, frequencyBinCount - 1);
-            
-            bands[buildingIdx++] = {
-                startBin,
-                endBin,
-                binCount: endBin - startBin + 1
-            };
+            bands[buildingIdx++] = { startBin, endBin, binCount: endBin - startBin + 1 };
         }
     }
-    
-    // Safety: ensure we have exactly bandCount bands
     while (bands.length < bandCount) {
         bands.push({ startBin: 1, endBin: 1, binCount: 1 });
     }
-    
     return bands.slice(0, bandCount);
 }
+
+export { CONFIG };
