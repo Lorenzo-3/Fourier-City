@@ -19,12 +19,12 @@ const CONFIG = {
     wireframeIdleBrightness: 0.35,
     wireframeEnergyBrightness: 0.65,
     skylineUpdateFps: 30,
-    fftSize: 1024,
+    fftSize: 2048,
     analyserMinDecibels: -90,
     analyserMaxDecibels: -8,
     analyserSmoothingTimeConstant: 0.05,
-    minHz: 40,
-    maxHz: 10000,
+    minHz: 20,
+    maxHz: 20000,
     heightBoost: 4,
     attack: 200,
     decay: 16,
@@ -47,14 +47,17 @@ const CONFIG = {
 };
 
 const SPECTRUM_COLOR_ANCHORS = [
-    { frequency: 40, color: new THREE.Color(0xff3b30) },
-    { frequency: 100, color: new THREE.Color(0xff6b3d) },
-    { frequency: 200, color: new THREE.Color(0xffd84d) },
-    { frequency: 500, color: new THREE.Color(0xb8f34a) },
-    { frequency: 1000, color: new THREE.Color(0x39e58c) },
-    { frequency: 2000, color: new THREE.Color(0x33d6e8) },
-    { frequency: 4000, color: new THREE.Color(0x3a8cff) },
-    { frequency: 10000, color: new THREE.Color(0xa855f7) }
+    { frequency: 20, color: new THREE.Color(0x3b3bff) },   // Deep Bass
+    { frequency: 40, color: new THREE.Color(0x3b7bff) },   // Low Bass
+    { frequency: 80, color: new THREE.Color(0x3bcbff) },   // Mild Bass
+    { frequency: 160, color: new THREE.Color(0x3bffcb) },  // Upper Bass
+    { frequency: 300, color: new THREE.Color(0x7bff3b) },  // Lower Midrange
+    { frequency: 600, color: new THREE.Color(0xcbff3b) },  // Middle Midrange
+    { frequency: 1200, color: new THREE.Color(0xffcb3b) }, // Upper Midrange
+    { frequency: 2400, color: new THREE.Color(0xff7b3b) }, // Presence Range
+    { frequency: 5000, color: new THREE.Color(0xff3b5b) }, // High End
+    { frequency: 10000, color: new THREE.Color(0xff3bab) }, // Extreme High End
+    { frequency: 20000, color: new THREE.Color(0xbf3bff) }
 ];
 
 const PATCH_VERSION = 12;
@@ -471,7 +474,7 @@ function createGroundFlowMaterial(energyTexture) {
                 gl_FragColor = vec4(combinedColor, combinedAlpha);
             }
         `,
-        blending: THREE.AdditiveBlending,
+        blending: THREE.NormalBlending,
         depthTest: true,
         depthWrite: false,
         transparent: true,
@@ -605,11 +608,12 @@ function buildSkyline(geometry, wireframeGeometry) {
     const skyline = new THREE.Group();
     skyline.name = 'AudioReactiveSkyline';
 
-    const solidMaterial = new THREE.MeshPhongMaterial({
-        color: CONFIG.solidColor,
-        emissive: CONFIG.solidEmissiveColor,
-        shininess: 80,
-        specular: 0x2f3842
+    const solidMaterial = new THREE.MeshStandardMaterial({
+        color: 0x111111,          // dark glossy base
+        roughness: 0.3,           // matches table / buttons
+        metalness: 0.1, 
+        emissive: CONFIG.solidEmissiveColor
+
     });
     const wireframeMaterial = new LineMaterial({
         color: 0xffffff,
@@ -997,30 +1001,67 @@ function readFrequencyBandEnergies() {
 }
 
 function buildLogFrequencyBands(sampleRate, fftSize, frequencyBinCount, bandCount) {
+    // Exact breakpoints from your image (Hz)
+    const breakpoints = [20, 40, 80, 160, 300, 600, 1200, 2400, 5000, 10000, 20000];
+    const numRanges = breakpoints.length - 1;  // = 10
     const nyquist = sampleRate / 2;
-    const maxHz = Math.min(CONFIG.maxHz, nyquist);
-    const minHz = Math.max(CONFIG.minHz, sampleRate / fftSize);
     const hzPerBin = sampleRate / fftSize;
 
-    return Array.from({ length: bandCount }, (_, bandIndex) => {
-        const lowerRatio = bandIndex / bandCount;
-        const upperRatio = (bandIndex + 1) / bandCount;
-        const lowerHz = minHz * ((maxHz / minHz) ** lowerRatio);
-        const upperHz = minHz * ((maxHz / minHz) ** upperRatio);
-        const startBin = THREE.MathUtils.clamp(
-            Math.floor(lowerHz / hzPerBin),
-            1,
-            frequencyBinCount - 1
-        );
-        const endBin = THREE.MathUtils.clamp(
-            Math.max(startBin, Math.ceil(upperHz / hzPerBin) - 1),
-            1,
-            frequencyBinCount - 1
-        );
-        return {
-            startBin,
-            endBin,
-            binCount: endBin - startBin + 1
-        };
-    });
+    // Clamp breakpoints to valid frequencies
+    const clampedBreakpoints = breakpoints.map(f => Math.min(f, nyquist));
+    
+    // Calculate how many buildings go into each range (roughly proportional to log width)
+    const buildingsPerRange = new Array(numRanges).fill(0);
+    let remaining = bandCount;
+    for (let i = 0; i < numRanges; i++) {
+        const lowLog = Math.log(clampedBreakpoints[i]);
+        const highLog = Math.log(clampedBreakpoints[i+1]);
+        const weight = highLog - lowLog;
+        buildingsPerRange[i] = Math.max(1, Math.round(weight * bandCount / (Math.log(nyquist) - Math.log(20))));
+        remaining -= buildingsPerRange[i];
+    }
+    // Distribute any rounding leftovers
+    for (let i = 0; i < remaining; i++) buildingsPerRange[i % numRanges]++;
+
+    // Build band objects for every building
+    const bands = [];
+    let buildingIdx = 0;
+    for (let range = 0; range < numRanges; range++) {
+        const lowHz = clampedBreakpoints[range];
+        const highHz = clampedBreakpoints[range+1];
+        const countInRange = buildingsPerRange[range];
+        
+        for (let sub = 0; sub < countInRange; sub++) {
+            // Logarithmic interpolation inside this range
+            const t = sub / countInRange;  // 0..1
+            const logLow = Math.log(lowHz);
+            const logHigh = Math.log(highHz);
+            const bandFreq = Math.exp(logLow + t * (logHigh - logLow));
+            
+            // Convert frequency to bin indices
+            const startBin = Math.max(1, Math.floor(bandFreq / hzPerBin));
+            let endBin;
+            if (sub === countInRange - 1) {
+                endBin = Math.min(frequencyBinCount - 1, Math.ceil(highHz / hzPerBin) - 1);
+            } else {
+                const nextT = (sub + 1) / countInRange;
+                const nextBandFreq = Math.exp(logLow + nextT * (logHigh - logLow));
+                endBin = Math.max(startBin, Math.floor(nextBandFreq / hzPerBin) - 1);
+            }
+            endBin = Math.min(endBin, frequencyBinCount - 1);
+            
+            bands[buildingIdx++] = {
+                startBin,
+                endBin,
+                binCount: endBin - startBin + 1
+            };
+        }
+    }
+    
+    // Safety: ensure we have exactly bandCount bands
+    while (bands.length < bandCount) {
+        bands.push({ startBin: 1, endBin: 1, binCount: 1 });
+    }
+    
+    return bands.slice(0, bandCount);
 }
