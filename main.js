@@ -3,7 +3,17 @@ import { PointerLockControls } from 'three/examples/jsm/controls/PointerLockCont
 import { EXRLoader } from 'three/examples/jsm/loaders/EXRLoader.js';
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
 import { initializeLore, updateLore, computeFilterMultipliers, getBandCenterFrequency } from './lore.js';
-import { createProceduralSignal, PROCEDURAL_SIGNALS } from './procedural-signals.js';
+import {
+  createPeriodicOscillator,
+  createProceduralSignal,
+  FUNDAMENTAL_HZ,
+  PROCEDURAL_OUTPUT_LEVEL,
+  PROCEDURAL_SIGNALS
+} from './procedural-signals.js';
+import {
+  normalizedPitchToFrequencyRatio,
+  normalizedPitchToSemitones
+} from './pitch-control.mjs';
 import { createWaveformDisplayBounds, mapWaveformSampleToY } from './waveform-visualization.mjs';
 
 // ============================================================
@@ -319,15 +329,10 @@ initializeLore({ scene, camera, audio: sound });
 // Web Audio processing
 let filters = null;
 let filtersInitialized = false;
-let pitchPassthroughNode = null;
-let pitchShifterNode = null;
-let pitchProcessorState = 'loading';
-let pitchInitializationPromise = null;
-let pitchInitializationVersion = 0;
-let pitchWorkletModuleLoaded = false;
 let waveformAnalyser = null;
 let waveformTimeData = null;
 let pitchknob = null;
+let activePeriodicSource = null;
 
 function initializeFilters() {
   if (filtersInitialized) return;
@@ -360,116 +365,12 @@ function initializeFilters() {
   waveformAnalyser.fftSize = 2048;
   waveformAnalyser.smoothingTimeConstant = 0;
   waveformTimeData = new Float32Array(waveformAnalyser.fftSize);
-  pitchPassthroughNode = audioContext.createGain();
   filtersInitialized = true;
 }
 
 function initializeAudioProcessing() {
   initializeFilters();
   rewireAudioGraph();
-  startPitchProcessorInitialization();
-}
-
-function startPitchProcessorInitialization() {
-  if (pitchProcessorState === 'ready') return Promise.resolve(pitchShifterNode);
-  if (pitchInitializationPromise) return pitchInitializationPromise;
-
-  const audioContext = listener.context;
-  const initializationVersion = ++pitchInitializationVersion;
-  pitchProcessorState = 'loading';
-  updatePitchKnobDisplay();
-
-  let candidateNode = null;
-  const initializationPromise = Promise.resolve().then(async () => {
-    try {
-      if (!audioContext.audioWorklet) {
-        throw new Error('AudioWorklet is not supported by this browser');
-      }
-
-      if (!pitchWorkletModuleLoaded) {
-        const workletUrl = new URL('audio/pitch-shifter-worklet.js', document.baseURI);
-        await audioContext.audioWorklet.addModule(workletUrl.href);
-        pitchWorkletModuleLoaded = true;
-      }
-
-      candidateNode = new AudioWorkletNode(audioContext, 'fourier-city-pitch-shifter', {
-        numberOfInputs: 1,
-        numberOfOutputs: 1,
-        outputChannelCount: [2],
-        channelCount: 2,
-        channelCountMode: 'max',
-        channelInterpretation: 'speakers'
-      });
-
-      candidateNode.onprocessorerror = () => {
-        markPitchProcessorUnavailable(
-          new Error('Pitch shifter processor stopped unexpectedly'),
-          candidateNode
-        );
-      };
-
-      await waitForPitchProcessorReady(candidateNode);
-      if (initializationVersion !== pitchInitializationVersion) {
-        candidateNode.port.close();
-        return null;
-      }
-
-      pitchShifterNode = candidateNode;
-      pitchProcessorState = 'ready';
-      applyPitchValue(pitchknob.userData.value, true);
-      rewireAudioGraph();
-      updatePitchKnobDisplay();
-      return candidateNode;
-    } catch (error) {
-      if (candidateNode && candidateNode !== pitchShifterNode) candidateNode.port.close();
-      if (initializationVersion === pitchInitializationVersion) {
-        markPitchProcessorUnavailable(error);
-      }
-      return null;
-    } finally {
-      if (pitchInitializationPromise === initializationPromise) {
-        pitchInitializationPromise = null;
-      }
-    }
-  });
-
-  pitchInitializationPromise = initializationPromise;
-  return pitchInitializationPromise;
-}
-
-function waitForPitchProcessorReady(node) {
-  return new Promise((resolve, reject) => {
-    const handleMessage = (event) => {
-      if (event.data?.type === 'ready') {
-        node.port.removeEventListener('message', handleMessage);
-        resolve(node);
-      }
-    };
-    node.port.addEventListener('message', handleMessage);
-    node.port.start();
-    node.port.postMessage({ type: 'ping' });
-    node.addEventListener('processorerror', () => {
-      node.port.removeEventListener('message', handleMessage);
-      reject(new Error('Pitch shifter processor failed during startup'));
-    }, { once: true });
-  });
-}
-
-function markPitchProcessorUnavailable(error, failedNode = null) {
-  if (failedNode && failedNode !== pitchShifterNode) return;
-
-  pitchInitializationVersion += 1;
-  pitchInitializationPromise = null;
-  pitchProcessorState = 'unavailable';
-  if (pitchShifterNode) pitchShifterNode.port.close();
-  pitchShifterNode = null;
-  rewireAudioGraph();
-  updatePitchKnobDisplay();
-  console.error('Pitch shifter unavailable; using speed-preserving passthrough:', error);
-}
-
-function updatePitchKnobDisplay() {
-  if (pitchknob) updateKnobValueDisplay(pitchknob);
 }
 
 let activeFilter = null;
@@ -488,11 +389,8 @@ const knobToFilter = {
 };
 
 function rewireAudioGraph() {
-  if (!sound || !filtersInitialized || !pitchPassthroughNode || !waveformAnalyser) return;
-  const pitchNode = pitchProcessorState === 'ready' && pitchShifterNode
-    ? pitchShifterNode
-    : pitchPassthroughNode;
-  const processingNodes = [pitchNode];
+  if (!sound || !filtersInitialized || !waveformAnalyser) return;
+  const processingNodes = [];
   if (activeFilter && filters?.[activeFilter]) processingNodes.push(filters[activeFilter]);
   processingNodes.push(waveformAnalyser);
   sound.setFilters(processingNodes);
@@ -526,7 +424,6 @@ function createGeneratedSource(signal) {
 
 function selectAudioSource(source) {
   stopCurrentPlayback();
-  resetPitchShifter();
   resetCurrentWaveform();
   waveformData = null;
   currentSource = source;
@@ -534,18 +431,21 @@ function selectAudioSource(source) {
   pendingSourceVersion = sourceRequestVersion;
   soundReady = false;
   waveformReady = false;
-  if (pitchProcessorState === 'unavailable') startPitchProcessorInitialization();
 }
 
 function stopCurrentPlayback() {
-  if (sound.isPlaying) sound.stop();
-  if (waveformData) waveformData.soundStarted = false;
-}
-
-function resetPitchShifter() {
-  if (pitchProcessorState === 'ready' && pitchShifterNode?.port) {
-    pitchShifterNode.port.postMessage({ type: 'reset' });
+  if (activePeriodicSource) {
+    if (sound._connected) sound.disconnect();
+    if (activePeriodicSource.started) activePeriodicSource.oscillator.stop();
+    activePeriodicSource.oscillator.disconnect();
+    activePeriodicSource.gain.disconnect();
+    activePeriodicSource = null;
+    sound.isPlaying = false;
+  } else {
+    if (sound.isPlaying) sound.stop();
+    if (sound._connected) sound.disconnect();
   }
+  if (waveformData) waveformData.soundStarted = false;
 }
 
 function loadAudioSource(source, requestVersion) {
@@ -554,25 +454,57 @@ function loadAudioSource(source, requestVersion) {
   initializeAudioProcessing();
 
   if (source.kind === 'procedural') {
+    if (source.signal.periodic) {
+      finishLoadingPeriodicSource(source, requestVersion);
+      return;
+    }
     const generatedSignal = createProceduralSignal(listener.context, source.signal);
-    finishLoadingSource(generatedSignal.buffer, requestVersion);
+    finishLoadingBufferSource(generatedSignal.buffer, requestVersion);
     return;
   }
 
   audioLoader.load(source.url, (buffer) => {
     if (requestVersion !== sourceRequestVersion) return;
-    finishLoadingSource(buffer, requestVersion);
+    finishLoadingBufferSource(buffer, requestVersion);
   }, null, (err) => {
     if (requestVersion === sourceRequestVersion) console.error('Audio Load Error:', err);
   });
 }
 
-function finishLoadingSource(buffer, requestVersion) {
+function finishLoadingPeriodicSource(source, requestVersion) {
   if (requestVersion !== sourceRequestVersion) return;
 
+  const pitchRatio = normalizedPitchToFrequencyRatio(pitchknob.userData.value);
+  const oscillator = createPeriodicOscillator(
+    listener.context,
+    source.signal,
+    FUNDAMENTAL_HZ * pitchRatio
+  );
+  const gain = listener.context.createGain();
+  gain.gain.value = PROCEDURAL_OUTPUT_LEVEL;
+  oscillator.connect(gain);
+  sound.setNodeSource(gain);
+  activePeriodicSource = { oscillator, gain, started: false };
+  finishLoadingSource(requestVersion);
+}
+
+function finishLoadingBufferSource(buffer, requestVersion) {
+  if (requestVersion !== sourceRequestVersion) return;
+
+  sound.hasPlaybackControl = true;
   sound.setBuffer(buffer);
   sound.setLoop(true);
-  sound.setPlaybackRate(1);
+  sound.setPlaybackRate(
+    currentSource.kind === 'mp3'
+      ? normalizedPitchToFrequencyRatio(pitchknob.userData.value)
+      : 1
+  );
+  finishLoadingSource(requestVersion);
+}
+
+function finishLoadingSource(requestVersion) {
+  if (requestVersion !== sourceRequestVersion) return;
+
   sound.setRefDistance(2);
   sound.setRolloffFactor(1);
   sound.setDistanceModel('inverse');
@@ -677,22 +609,46 @@ function findStableWaveformStart(samples, displayLength) {
   return bestStart;
 }
 
-function getPitchSemitones(value) {
-  return -12 + value * 24;
+function applyPitchValue(value, immediately = false) {
+  const pitchRatio = normalizedPitchToFrequencyRatio(value);
+  const currentTime = listener.context.currentTime;
+
+  if (activePeriodicSource) {
+    const frequency = activePeriodicSource.oscillator.frequency;
+    frequency.cancelScheduledValues(currentTime);
+    if (immediately) {
+      frequency.setValueAtTime(FUNDAMENTAL_HZ * pitchRatio, currentTime);
+    } else {
+      frequency.setTargetAtTime(FUNDAMENTAL_HZ * pitchRatio, currentTime, 0.03);
+    }
+  } else if (soundReady && currentSource.kind === 'mp3') {
+    sound.setPlaybackRate(pitchRatio);
+  }
 }
 
-function applyPitchValue(value, immediately = false) {
-  if (pitchProcessorState !== 'ready' || !pitchShifterNode) return;
-  const pitchRatio = 2 ** (getPitchSemitones(value) / 12);
-  const parameter = pitchShifterNode.parameters.get('pitchRatio');
-  if (!parameter) return;
-
-  const currentTime = listener.context.currentTime;
-  parameter.cancelScheduledValues(currentTime);
-  if (immediately) {
-    parameter.setValueAtTime(pitchRatio, currentTime);
+function playCurrentSource() {
+  if (activePeriodicSource) {
+    const currentTime = listener.context.currentTime;
+    activePeriodicSource.gain.gain.cancelScheduledValues(currentTime);
+    activePeriodicSource.gain.gain.setTargetAtTime(PROCEDURAL_OUTPUT_LEVEL, currentTime, 0.01);
+    if (!activePeriodicSource.started) {
+      activePeriodicSource.oscillator.start();
+      activePeriodicSource.started = true;
+    }
+    sound.isPlaying = true;
   } else {
-    parameter.setTargetAtTime(pitchRatio, currentTime, 0.03);
+    sound.play();
+  }
+}
+
+function pauseCurrentSource() {
+  if (activePeriodicSource) {
+    const currentTime = listener.context.currentTime;
+    activePeriodicSource.gain.gain.cancelScheduledValues(currentTime);
+    activePeriodicSource.gain.gain.setTargetAtTime(0, currentTime, 0.01);
+    sound.isPlaying = false;
+  } else if (sound.isPlaying) {
+    sound.pause();
   }
 }
 
@@ -700,13 +656,13 @@ function togglePauseResume() {
   if (!stopbutton.userData.clicked) {
     stopbutton.userData.clicked = true;
     if (waveformData?.soundStarted) {
-      sound.pause();
+      pauseCurrentSource();
       waveformData.soundStarted = false;
     }
   } else {
     stopbutton.userData.clicked = false;
-    if (waveformData && !sound.isPlaying) {
-      sound.play();
+    if (waveformData && !waveformData.soundStarted) {
+      playCurrentSource();
       waveformData.soundStarted = true;
     }
   }
@@ -981,12 +937,8 @@ function updateKnobValueDisplay(knob) {
 
     let displayValue;
     if (knob.userData.name === 'pitchknob') {
-      if (pitchProcessorState === 'ready') {
-        const semitones = getPitchSemitones(knob.userData.value);
-        displayValue = `${semitones > 0 ? '+' : ''}${semitones.toFixed(1)} st`;
-      } else {
-        displayValue = pitchProcessorState === 'loading' ? 'LOADING' : 'UNAVAILABLE';
-      }
+      const semitones = normalizedPitchToSemitones(knob.userData.value);
+      displayValue = `${semitones > 0 ? '+' : ''}${semitones.toFixed(1)} st`;
     } else if (knob.userData.name === 'cutoffknob') {
       const minFreq = 20;
       const maxFreq = 20000;
@@ -1246,7 +1198,6 @@ const resonanceknob = createKnobMesh(new THREE.Vector3(0.3, 1.24, 1.05), 'resona
 function updateFilterParameter(knobName, value) {
   const paramType = knobToFilter[knobName];
   if (paramType === 'pitch') {
-    if (pitchProcessorState === 'unavailable') startPitchProcessorInitialization();
     applyPitchValue(value);
     return;
   }
@@ -1356,7 +1307,7 @@ function playmusic() {
 
   if (soundReady && waveformReady && waveformData && !waveformData.soundStarted && !stopbutton.userData.clicked) {
     waveformReady = false;
-    sound.play();
+    playCurrentSource();
     waveformData.soundStarted = true;
     if (currentPlayingButton && !currentPlayingButton.userData.pressed) {
       currentPlayingButton.userData.pressed = true;

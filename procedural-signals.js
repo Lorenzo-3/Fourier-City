@@ -1,9 +1,10 @@
-const FUNDAMENTAL_HZ = 220;
+export const FUNDAMENTAL_HZ = 220;
 const MAX_HZ = 20000;
-const OUTPUT_LEVEL = 0.35;
+export const PROCEDURAL_OUTPUT_LEVEL = 0.35;
 const BUFFER_CYCLES = 220;
 const DISPLAY_CYCLES = 4;
 const NOISE_DISPLAY_SAMPLES = 2048;
+const RICH_AMPLITUDES = Object.freeze([1, 0.78, 0.62, 0.49, 0.38, 0.29, 0.22, 0.16]);
 
 export const PROCEDURAL_SIGNALS = Object.freeze({
     sine: Object.freeze({ id: 'sine', periodic: true }),
@@ -41,6 +42,24 @@ export function createProceduralSignal(audioContext, signal) {
     };
 }
 
+export function createPeriodicOscillator(audioContext, signal, frequency = FUNDAMENTAL_HZ) {
+    const definition = resolveSignal(signal);
+    if (!definition.periodic) {
+        throw new Error(`Cannot create an oscillator for non-periodic signal: ${definition.id}`);
+    }
+
+    const oscillator = audioContext.createOscillator();
+    oscillator.frequency.value = Math.min(MAX_HZ, Math.max(1, frequency));
+
+    if (definition.id === 'rich') {
+        oscillator.setPeriodicWave(createRichPeriodicWave(audioContext));
+    } else {
+        oscillator.type = definition.id === 'saw' ? 'sawtooth' : definition.id;
+    }
+
+    return oscillator;
+}
+
 function resolveSignal(signal) {
     const signalId = typeof signal === 'string' ? signal : signal?.id;
     const definition = PROCEDURAL_SIGNALS[signalId];
@@ -54,7 +73,6 @@ function resolveSignal(signal) {
 
 function fillPeriodicSignal(samples, signalId, fundamentalHz, sampleRate) {
     const maxHarmonic = Math.max(1, Math.floor(MAX_HZ / fundamentalHz));
-    const richAmplitudes = [1, 0.78, 0.62, 0.49, 0.38, 0.29, 0.22, 0.16];
 
     for (let sampleIndex = 0; sampleIndex < samples.length; sampleIndex += 1) {
         const phase = 2 * Math.PI * fundamentalHz * sampleIndex / sampleRate;
@@ -81,8 +99,8 @@ function fillPeriodicSignal(samples, signalId, fundamentalHz, sampleRate) {
                 }
                 break;
             case 'rich':
-                for (let harmonic = 1; harmonic <= richAmplitudes.length; harmonic += 1) {
-                    value += richAmplitudes[harmonic - 1] * Math.sin(phase * harmonic);
+                for (let harmonic = 1; harmonic <= RICH_AMPLITUDES.length; harmonic += 1) {
+                    value += RICH_AMPLITUDES[harmonic - 1] * Math.sin(phase * harmonic);
                 }
                 break;
         }
@@ -107,11 +125,18 @@ function normalizeSamples(samples) {
         peak = Math.max(peak, Math.abs(samples[index]));
     }
 
-    const scale = peak > 0 ? OUTPUT_LEVEL / peak : 1;
+    const scale = peak > 0 ? PROCEDURAL_OUTPUT_LEVEL / peak : 1;
 
     for (let index = 0; index < samples.length; index += 1) {
         samples[index] *= scale;
     }
+}
+
+function createRichPeriodicWave(audioContext) {
+    const real = new Float32Array(RICH_AMPLITUDES.length + 1);
+    const imaginary = new Float32Array(RICH_AMPLITUDES.length + 1);
+    imaginary.set(RICH_AMPLITUDES, 1);
+    return audioContext.createPeriodicWave(real, imaginary);
 }
 
 function copyPeriodicDisplaySamples(samples, periodSamples) {
