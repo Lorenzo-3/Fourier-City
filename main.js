@@ -1,8 +1,10 @@
 import * as THREE from 'three';
 import { PointerLockControls } from 'three/examples/jsm/controls/PointerLockControls.js';
+import { EXRLoader } from 'three/examples/jsm/loaders/EXRLoader.js';
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
 import { initializeLore, updateLore, computeFilterMultipliers, getBandCenterFrequency } from './lore.js';
 import { createProceduralSignal, PROCEDURAL_SIGNALS } from './procedural-signals.js';
+import { createWaveformDisplayBounds, mapWaveformSampleToY } from './waveform-visualization.mjs';
 
 // ============================================================
 // RENDERER SETUP (Improved shading, shadows, tone mapping)
@@ -89,41 +91,31 @@ fileInput.addEventListener('cancel', () => {
 const scene = new THREE.Scene();
 
 // ============================================================
-// ENVIRONMENT MAP & LIGHTING (from the "shadowing" code)
+// HDRI ENVIRONMENT & LIGHTING
 // ============================================================
-let envMap = null;
-const cubeTextureLoader = new THREE.CubeTextureLoader();
-const cubeMap = cubeTextureLoader.load(
-  ['img/stars.jpg', 'img/stars.jpg', 'img/stars.jpg', 'img/stars.jpg', 'img/stars.jpg', 'img/stars.jpg'],
-  (cubeMap) => {
-    const pmremGenerator = new THREE.PMREMGenerator(renderer);
-    envMap = pmremGenerator.fromCubemap(cubeMap).texture;
+scene.background = new THREE.Color(0x020308);
+scene.backgroundIntensity = 0.7;
+scene.environmentIntensity = 1.0;
+
+const pmremGenerator = new THREE.PMREMGenerator(renderer);
+pmremGenerator.compileEquirectangularShader();
+
+new EXRLoader().load(
+  'img/night-sky-4k.exr',
+  (texture) => {
+    texture.mapping = THREE.EquirectangularReflectionMapping;
+    const environmentRenderTarget = pmremGenerator.fromEquirectangular(texture);
+
+    scene.background = texture;
+    scene.environment = environmentRenderTarget.texture;
     pmremGenerator.dispose();
-    updateAllMaterialEnvMaps(envMap);
-    scene.background = envMap;   // use the filtered environment as background
+  },
+  undefined,
+  (error) => {
+    pmremGenerator.dispose();
+    console.error('HDRI environment failed to load; using dark background fallback:', error);
   }
 );
-scene.background = cubeMap;      // fallback until envMap is ready
-
-function updateAllMaterialEnvMaps(envMap) {
-  scene.traverse((child) => {
-    if (child instanceof THREE.Mesh && child.material) {
-      if (Array.isArray(child.material)) {
-        child.material.forEach(mat => {
-          if (mat instanceof THREE.MeshStandardMaterial) {
-            mat.envMap = envMap;
-            mat.envMapIntensity = 0.8;
-            mat.needsUpdate = true;
-          }
-        });
-      } else if (child.material instanceof THREE.MeshStandardMaterial) {
-        child.material.envMap = envMap;
-        child.material.envMapIntensity = 0.8;
-        child.material.needsUpdate = true;
-      }
-    }
-  });
-}
 
 // Directional light (with shadows)
 const dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
@@ -197,8 +189,6 @@ const glassMaterial = new THREE.MeshPhysicalMaterial({
   transparent: true,
   opacity: 0.3,
   side: THREE.DoubleSide,
-  envMap: envMap,
-  envMapIntensity: 0.8,
   transmission: 0.9,
   thickness: 0.5,
   ior: 1.5,
@@ -207,6 +197,13 @@ const glassBox = new THREE.Mesh(boxGeometry, glassMaterial);
 glassBox.position.set(0, 1.8, -0.5);
 glassBox.receiveShadow = true;
 scene.add(glassBox);
+const waveformDisplayBounds = createWaveformDisplayBounds({
+  centerX: glassBox.position.x,
+  centerY: glassBox.position.y,
+  centerZ: glassBox.position.z,
+  width: boxGeometry.parameters.width,
+  height: boxGeometry.parameters.height
+});
 
 // ============================================================
 // LOADERS & TEXT CREATION
@@ -259,16 +256,14 @@ function createTextSprite(text, position, color = 0xffffff) {
 }
 
 // ============================================================
-// TABLE MODEL LOADING (with shadows and envMap)
+// TABLE MODEL LOADING (with shadows)
 // ============================================================
 let tableObject;
 loader.load('models/table.obj', (object) => {
   const tableMaterial = new THREE.MeshStandardMaterial({
     color: 0xffffff,
     roughness: 0.2,
-    metalness: 0.1,
-    envMap: envMap,
-    envMapIntensity: 0.8
+    metalness: 0.1
   });
 
   object.traverse((child) => {
@@ -283,16 +278,6 @@ loader.load('models/table.obj', (object) => {
   scene.add(object);
   tableObject = object;
 
-  if (envMap) {
-    object.traverse((child) => {
-      if (child.material) {
-        child.material.envMap = envMap;
-        child.material.envMapIntensity = 0.8;
-        child.material.needsUpdate = true;
-      }
-    });
-  }
-
   tableObject.updateMatrixWorld(true);
   tableCollisionBox = new THREE.Box3().setFromObject(tableObject);
   tableCollisionBox.expandByVector(new THREE.Vector3(PLAYER_RADIUS, 0, PLAYER_RADIUS));
@@ -304,9 +289,7 @@ loader.load('models/table_wireframe.obj', (object) => {
     color: 0x000000,
     wireframe: true,
     roughness: 0.2,
-    metalness: 0.1,
-    envMap: envMap,
-    envMapIntensity: 0.8
+    metalness: 0.1
   });
 
   object.traverse((child) => {
@@ -321,16 +304,6 @@ loader.load('models/table_wireframe.obj', (object) => {
   scene.add(object);
   tablewireframeObject = object;
 
-  if (envMap) {
-    object.traverse((child) => {
-      if (child.material) {
-        child.material.envMap = envMap;
-        child.material.envMapIntensity = 0.8;
-        child.material.needsUpdate = true;
-      }
-    });
-  }
-
   tablewireframeObject.updateMatrixWorld(true);
   tableCollisionBox = new THREE.Box3().setFromObject(tablewireframeObject);
   tableCollisionBox.expandByVector(new THREE.Vector3(PLAYER_RADIUS, 0, PLAYER_RADIUS));
@@ -343,9 +316,18 @@ const sound = new THREE.PositionalAudio(listener);
 const audioLoader = new THREE.AudioLoader();
 initializeLore({ scene, camera, audio: sound });
 
-// Web Audio filters
+// Web Audio processing
 let filters = null;
 let filtersInitialized = false;
+let pitchPassthroughNode = null;
+let pitchShifterNode = null;
+let pitchProcessorState = 'loading';
+let pitchInitializationPromise = null;
+let pitchInitializationVersion = 0;
+let pitchWorkletModuleLoaded = false;
+let waveformAnalyser = null;
+let waveformTimeData = null;
+let pitchknob = null;
 
 function initializeFilters() {
   if (filtersInitialized) return;
@@ -374,7 +356,120 @@ function initializeFilters() {
   filters.bandpass.Q.value = 1;
   filters.peaking.Q.value = 1;
 
+  waveformAnalyser = audioContext.createAnalyser();
+  waveformAnalyser.fftSize = 2048;
+  waveformAnalyser.smoothingTimeConstant = 0;
+  waveformTimeData = new Float32Array(waveformAnalyser.fftSize);
+  pitchPassthroughNode = audioContext.createGain();
   filtersInitialized = true;
+}
+
+function initializeAudioProcessing() {
+  initializeFilters();
+  rewireAudioGraph();
+  startPitchProcessorInitialization();
+}
+
+function startPitchProcessorInitialization() {
+  if (pitchProcessorState === 'ready') return Promise.resolve(pitchShifterNode);
+  if (pitchInitializationPromise) return pitchInitializationPromise;
+
+  const audioContext = listener.context;
+  const initializationVersion = ++pitchInitializationVersion;
+  pitchProcessorState = 'loading';
+  updatePitchKnobDisplay();
+
+  let candidateNode = null;
+  const initializationPromise = Promise.resolve().then(async () => {
+    try {
+      if (!audioContext.audioWorklet) {
+        throw new Error('AudioWorklet is not supported by this browser');
+      }
+
+      if (!pitchWorkletModuleLoaded) {
+        const workletUrl = new URL('audio/pitch-shifter-worklet.js', document.baseURI);
+        await audioContext.audioWorklet.addModule(workletUrl.href);
+        pitchWorkletModuleLoaded = true;
+      }
+
+      candidateNode = new AudioWorkletNode(audioContext, 'fourier-city-pitch-shifter', {
+        numberOfInputs: 1,
+        numberOfOutputs: 1,
+        outputChannelCount: [2],
+        channelCount: 2,
+        channelCountMode: 'max',
+        channelInterpretation: 'speakers'
+      });
+
+      candidateNode.onprocessorerror = () => {
+        markPitchProcessorUnavailable(
+          new Error('Pitch shifter processor stopped unexpectedly'),
+          candidateNode
+        );
+      };
+
+      await waitForPitchProcessorReady(candidateNode);
+      if (initializationVersion !== pitchInitializationVersion) {
+        candidateNode.port.close();
+        return null;
+      }
+
+      pitchShifterNode = candidateNode;
+      pitchProcessorState = 'ready';
+      applyPitchValue(pitchknob.userData.value, true);
+      rewireAudioGraph();
+      updatePitchKnobDisplay();
+      return candidateNode;
+    } catch (error) {
+      if (candidateNode && candidateNode !== pitchShifterNode) candidateNode.port.close();
+      if (initializationVersion === pitchInitializationVersion) {
+        markPitchProcessorUnavailable(error);
+      }
+      return null;
+    } finally {
+      if (pitchInitializationPromise === initializationPromise) {
+        pitchInitializationPromise = null;
+      }
+    }
+  });
+
+  pitchInitializationPromise = initializationPromise;
+  return pitchInitializationPromise;
+}
+
+function waitForPitchProcessorReady(node) {
+  return new Promise((resolve, reject) => {
+    const handleMessage = (event) => {
+      if (event.data?.type === 'ready') {
+        node.port.removeEventListener('message', handleMessage);
+        resolve(node);
+      }
+    };
+    node.port.addEventListener('message', handleMessage);
+    node.port.start();
+    node.port.postMessage({ type: 'ping' });
+    node.addEventListener('processorerror', () => {
+      node.port.removeEventListener('message', handleMessage);
+      reject(new Error('Pitch shifter processor failed during startup'));
+    }, { once: true });
+  });
+}
+
+function markPitchProcessorUnavailable(error, failedNode = null) {
+  if (failedNode && failedNode !== pitchShifterNode) return;
+
+  pitchInitializationVersion += 1;
+  pitchInitializationPromise = null;
+  pitchProcessorState = 'unavailable';
+  if (pitchShifterNode) pitchShifterNode.port.close();
+  pitchShifterNode = null;
+  rewireAudioGraph();
+  updatePitchKnobDisplay();
+  console.error('Pitch shifter unavailable; using speed-preserving passthrough:', error);
+}
+
+function updatePitchKnobDisplay() {
+  if (pitchknob) updateKnobValueDisplay(pitchknob);
 }
 
 let activeFilter = null;
@@ -393,11 +488,14 @@ const knobToFilter = {
 };
 
 function rewireAudioGraph() {
-  if (!sound || !filtersInitialized) return;
-  const activeAudioFilter = activeFilter && filters?.[activeFilter]
-    ? [filters[activeFilter]]
-    : [];
-  sound.setFilters(activeAudioFilter);
+  if (!sound || !filtersInitialized || !pitchPassthroughNode || !waveformAnalyser) return;
+  const pitchNode = pitchProcessorState === 'ready' && pitchShifterNode
+    ? pitchShifterNode
+    : pitchPassthroughNode;
+  const processingNodes = [pitchNode];
+  if (activeFilter && filters?.[activeFilter]) processingNodes.push(filters[activeFilter]);
+  processingNodes.push(waveformAnalyser);
+  sound.setFilters(processingNodes);
 }
 
 function applyActiveFilterParameters() {
@@ -408,35 +506,7 @@ function applyActiveFilterParameters() {
   }
 }
 
-// Waveform display material (shader)
-const waveformMaterial = new THREE.ShaderMaterial({
-  uniforms: {
-    minX: { value: -1.5 },
-    maxX: { value: 1.5 },
-    linePositionX: { value: 0 },
-    color: { value: new THREE.Color(0xff0000) }
-  },
-  vertexShader: `
-    varying vec3 vPos;
-    void main() {
-      vPos = position;
-      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-    }
-  `,
-  fragmentShader: `
-    uniform float minX;
-    uniform float maxX;
-    uniform float linePositionX;
-    uniform vec3 color;
-    varying vec3 vPos;
-    void main() {
-      float worldX = vPos.x + linePositionX;
-      if (worldX < minX || worldX > maxX) discard;
-      gl_FragColor = vec4(color, 1.0);
-    }
-  `
-});
-
+const LIVE_WAVEFORM_POINTS = 512;
 let waveformData = null;
 let currentSource = createMp3Source('sounds/ijustthrewouthelovefmydreams.mp3');
 let sourceRequestVersion = 1;
@@ -456,13 +526,15 @@ function createGeneratedSource(signal) {
 
 function selectAudioSource(source) {
   stopCurrentPlayback();
-  disposeCurrentWaveform();
+  resetPitchShifter();
+  resetCurrentWaveform();
   waveformData = null;
   currentSource = source;
   sourceRequestVersion += 1;
   pendingSourceVersion = sourceRequestVersion;
   soundReady = false;
   waveformReady = false;
+  if (pitchProcessorState === 'unavailable') startPitchProcessorInitialization();
 }
 
 function stopCurrentPlayback() {
@@ -470,65 +542,49 @@ function stopCurrentPlayback() {
   if (waveformData) waveformData.soundStarted = false;
 }
 
+function resetPitchShifter() {
+  if (pitchProcessorState === 'ready' && pitchShifterNode?.port) {
+    pitchShifterNode.port.postMessage({ type: 'reset' });
+  }
+}
+
 function loadAudioSource(source, requestVersion) {
   soundReady = false;
   waveformReady = false;
-  initializeFilters();
+  initializeAudioProcessing();
 
   if (source.kind === 'procedural') {
     const generatedSignal = createProceduralSignal(listener.context, source.signal);
-    finishLoadingSource(generatedSignal.buffer, generatedSignal.visualizationSamples, true, requestVersion);
+    finishLoadingSource(generatedSignal.buffer, requestVersion);
     return;
   }
 
   audioLoader.load(source.url, (buffer) => {
     if (requestVersion !== sourceRequestVersion) return;
-    finishLoadingSource(buffer, buffer.getChannelData(0), false, requestVersion);
+    finishLoadingSource(buffer, requestVersion);
   }, null, (err) => {
     if (requestVersion === sourceRequestVersion) console.error('Audio Load Error:', err);
   });
 }
 
-function finishLoadingSource(buffer, visualizationSamples, isStatic, requestVersion) {
+function finishLoadingSource(buffer, requestVersion) {
   if (requestVersion !== sourceRequestVersion) return;
 
-  disposeCurrentWaveform();
   sound.setBuffer(buffer);
   sound.setLoop(true);
-  sound.setPlaybackRate(getPitchPlaybackRate());
+  sound.setPlaybackRate(1);
   sound.setRefDistance(2);
   sound.setRolloffFactor(1);
   sound.setDistanceModel('inverse');
   sound.setDirectionalCone(360, 360, 1);
   applyActiveFilterParameters();
   rewireAudioGraph();
-
-  const totalWidth = isStatic ? 3 : buffer.duration * 20;
-  const fullWaveformGeometry = new THREE.BufferGeometry();
-  const fullPositions = new Float32Array(visualizationSamples.length * 3);
-  const amplitude = isStatic ? 2 : 0.8;
-
-  for (let index = 0; index < visualizationSamples.length; index += 1) {
-    fullPositions[index * 3] = (index / Math.max(visualizationSamples.length - 1, 1)) * totalWidth - 1.5;
-    fullPositions[index * 3 + 1] = 1.8 + visualizationSamples[index] * amplitude;
-    fullPositions[index * 3 + 2] = -0.5;
-  }
-
-  fullWaveformGeometry.setAttribute('position', new THREE.BufferAttribute(fullPositions, 3));
-  const fullWaveform = new THREE.Line(fullWaveformGeometry, waveformMaterial);
-  fullWaveform.position.x = 0;
-  waveformMaterial.uniforms.linePositionX.value = 0;
-  currentWaveformMesh = fullWaveform;
-  scene.add(fullWaveform);
+  ensureLiveWaveform();
+  resetCurrentWaveform();
 
   waveformData = {
-    line: fullWaveform,
-    duration: buffer.duration,
-    totalWidth,
-    isStatic,
+    line: currentWaveformMesh,
     sound,
-    startTime: null,
-    pausedElapsed: 0,
     soundStarted: false
   };
 
@@ -542,16 +598,102 @@ function finishLoadingSource(buffer, visualizationSamples, isStatic, requestVers
   soundReady = true;
 }
 
-function disposeCurrentWaveform() {
-  if (!currentWaveformMesh) return;
-  scene.remove(currentWaveformMesh);
-  currentWaveformMesh.geometry.dispose();
-  currentWaveformMesh = null;
+function ensureLiveWaveform() {
+  if (currentWaveformMesh) return;
+
+  const positions = new Float32Array(LIVE_WAVEFORM_POINTS * 3);
+  for (let index = 0; index < LIVE_WAVEFORM_POINTS; index += 1) {
+    positions[index * 3] = THREE.MathUtils.lerp(
+      waveformDisplayBounds.minX,
+      waveformDisplayBounds.maxX,
+      index / (LIVE_WAVEFORM_POINTS - 1)
+    );
+    positions[index * 3 + 1] = waveformDisplayBounds.centerY;
+    positions[index * 3 + 2] = waveformDisplayBounds.z;
+  }
+
+  const geometry = new THREE.BufferGeometry();
+  const positionAttribute = new THREE.BufferAttribute(positions, 3);
+  positionAttribute.setUsage(THREE.DynamicDrawUsage);
+  geometry.setAttribute('position', positionAttribute);
+  currentWaveformMesh = new THREE.Line(
+    geometry,
+    new THREE.LineBasicMaterial({
+      color: 0xff0000,
+      depthTest: false,
+      depthWrite: false
+    })
+  );
+  currentWaveformMesh.renderOrder = 20;
+  scene.add(currentWaveformMesh);
 }
 
-function getPitchPlaybackRate() {
-  const pitch = knobObjects.find(knob => knob.userData.name === 'pitchknob');
-  return pitch ? 0.5 + pitch.userData.value : 1;
+function resetCurrentWaveform() {
+  if (!currentWaveformMesh) return;
+  const positions = currentWaveformMesh.geometry.getAttribute('position');
+  for (let index = 0; index < positions.count; index += 1) {
+    positions.setY(index, waveformDisplayBounds.centerY);
+  }
+  positions.needsUpdate = true;
+}
+
+function updateLiveWaveform() {
+  if (!waveformData?.soundStarted || !waveformAnalyser || !waveformTimeData || !currentWaveformMesh) return;
+
+  waveformAnalyser.getFloatTimeDomainData(waveformTimeData);
+  const positions = currentWaveformMesh.geometry.getAttribute('position');
+  const startIndex = findStableWaveformStart(waveformTimeData, positions.count);
+
+  for (let index = 0; index < positions.count; index += 1) {
+    positions.setY(
+      index,
+      mapWaveformSampleToY(waveformTimeData[startIndex + index], waveformDisplayBounds)
+    );
+  }
+  positions.needsUpdate = true;
+}
+
+function findStableWaveformStart(samples, displayLength) {
+  const maximumStart = Math.max(0, samples.length - displayLength);
+  const targetStart = Math.floor(maximumStart / 2);
+  const searchRadius = Math.min(displayLength / 2, maximumStart);
+  let bestStart = targetStart;
+  let bestDistance = Infinity;
+
+  for (
+    let index = Math.max(1, Math.floor(targetStart - searchRadius));
+    index <= Math.min(maximumStart, Math.ceil(targetStart + searchRadius));
+    index += 1
+  ) {
+    if (samples[index - 1] <= 0 && samples[index] > 0) {
+      const distance = Math.abs(index - targetStart);
+      if (distance < bestDistance) {
+        bestStart = index;
+        bestDistance = distance;
+      }
+    }
+  }
+
+  return bestStart;
+}
+
+function getPitchSemitones(value) {
+  return -12 + value * 24;
+}
+
+function applyPitchValue(value, immediately = false) {
+  if (pitchProcessorState !== 'ready' || !pitchShifterNode) return;
+  const pitchRatio = 2 ** (getPitchSemitones(value) / 12);
+  const parameter = pitchShifterNode.parameters.get('pitchRatio');
+  if (!parameter) return;
+
+  const currentTime = listener.context.currentTime;
+  parameter.cancelScheduledValues(currentTime);
+  if (immediately) {
+    parameter.setValueAtTime(pitchRatio, currentTime);
+  } else {
+    parameter.setTargetAtTime(pitchRatio, currentTime, 0.03);
+  }
 }
 
 function togglePauseResume() {
@@ -559,15 +701,12 @@ function togglePauseResume() {
     stopbutton.userData.clicked = true;
     if (waveformData?.soundStarted) {
       sound.pause();
-      const currentTime = listener.context.currentTime;
-      waveformData.pausedElapsed = currentTime - waveformData.startTime;
       waveformData.soundStarted = false;
     }
   } else {
     stopbutton.userData.clicked = false;
     if (waveformData && !sound.isPlaying) {
       sound.play();
-      waveformData.startTime = listener.context.currentTime - waveformData.pausedElapsed;
       waveformData.soundStarted = true;
     }
   }
@@ -842,8 +981,12 @@ function updateKnobValueDisplay(knob) {
 
     let displayValue;
     if (knob.userData.name === 'pitchknob') {
-      const playbackRate = 0.5 + knob.userData.value * 1.0;
-      displayValue = playbackRate.toFixed(2) + 'x';
+      if (pitchProcessorState === 'ready') {
+        const semitones = getPitchSemitones(knob.userData.value);
+        displayValue = `${semitones > 0 ? '+' : ''}${semitones.toFixed(1)} st`;
+      } else {
+        displayValue = pitchProcessorState === 'loading' ? 'LOADING' : 'UNAVAILABLE';
+      }
     } else if (knob.userData.name === 'cutoffknob') {
       const minFreq = 20;
       const maxFreq = 20000;
@@ -958,9 +1101,7 @@ function createButton(position, name, color, text, isBand = false, source = null
   const material = new THREE.MeshStandardMaterial({
     color: color,
     roughness: 0.25,
-    metalness: 0.0,
-    envMap: envMap,
-    envMapIntensity: 0.6
+    metalness: 0.0
   });
 
   button = new THREE.Mesh(geometry, material);
@@ -1097,21 +1238,19 @@ const peakingbutton = createButton(
 );
 
 // Knobs
-const pitchknob = createKnobMesh(new THREE.Vector3(0.0, 1.24, 1.3), 'pitchknob', 0.5, 0.5, 1.5);
+pitchknob = createKnobMesh(new THREE.Vector3(0.0, 1.24, 1.3), 'pitchknob', 0.5, -12, 12);
 const cutoffknob = createKnobMesh(new THREE.Vector3(-0.3, 1.24, 1.05), 'cutoffknob', 0.5, 20, 20000);
 const gainknob = createKnobMesh(new THREE.Vector3(0.0, 1.24, 1.05), 'gainknob', 0.5, -18, 18);
 const resonanceknob = createKnobMesh(new THREE.Vector3(0.3, 1.24, 1.05), 'resonanceknob', 0.1, 0.1, 20);
 
 function updateFilterParameter(knobName, value) {
-  if (!filtersInitialized) return;
   const paramType = knobToFilter[knobName];
   if (paramType === 'pitch') {
-    if (waveformData && waveformData.sound) {
-      const playbackRate = 0.5 + value * 1.0;
-      waveformData.sound.setPlaybackRate(playbackRate);
-    }
+    if (pitchProcessorState === 'unavailable') startPitchProcessorInitialization();
+    applyPitchValue(value);
     return;
   }
+  if (!filtersInitialized) return;
   if (!activeFilter || !filters) return;
   const filter = filters[activeFilter];
   if (!filter) return;
@@ -1218,7 +1357,6 @@ function playmusic() {
   if (soundReady && waveformReady && waveformData && !waveformData.soundStarted && !stopbutton.userData.clicked) {
     waveformReady = false;
     sound.play();
-    waveformData.startTime = listener.context.currentTime;
     waveformData.soundStarted = true;
     if (currentPlayingButton && !currentPlayingButton.userData.pressed) {
       currentPlayingButton.userData.pressed = true;
@@ -1228,15 +1366,7 @@ function playmusic() {
     }
   }
 
-  if (waveformData && waveformData.soundStarted && !waveformData.isStatic && !stopbutton.userData.clicked) {
-    const currentTime = listener.context.currentTime;
-    const elapsed = currentTime - waveformData.startTime;
-    const playbackElapsed = elapsed * sound.getPlaybackRate();
-    const progressRatio = (playbackElapsed % waveformData.duration) / waveformData.duration;
-    const offset = progressRatio * waveformData.totalWidth;
-    waveformData.line.position.x = -offset;
-    waveformData.line.material.uniforms.linePositionX.value = waveformData.line.position.x;
-  }
+  updateLiveWaveform();
 }
 
 function clickanimation() {
