@@ -1,17 +1,25 @@
-export const MIN_PITCH_SEMITONES = -12;
-export const MAX_PITCH_SEMITONES = 12;
+export const MIN_PLAYBACK_RATE = 0.5;
+export const MAX_PLAYBACK_RATE = 1.5;
+export const MIN_PITCH_FREQUENCY_HZ = 20;
+export const MAX_PITCH_FREQUENCY_HZ = 20000;
 
-export function normalizedPitchToSemitones(value) {
-  return MIN_PITCH_SEMITONES
-    + clampNormalizedValue(value) * (MAX_PITCH_SEMITONES - MIN_PITCH_SEMITONES);
+export function normalizedPitchToPlaybackRate(value) {
+  return MIN_PLAYBACK_RATE
+    + clampNormalizedValue(value) * (MAX_PLAYBACK_RATE - MIN_PLAYBACK_RATE);
 }
 
-export function semitonesToFrequencyRatio(semitones) {
-  return 2 ** (semitones / 12);
+export function normalizedPitchToFrequency(value) {
+  return MIN_PITCH_FREQUENCY_HZ
+    * ((MAX_PITCH_FREQUENCY_HZ / MIN_PITCH_FREQUENCY_HZ) ** clampNormalizedValue(value));
 }
 
-export function normalizedPitchToFrequencyRatio(value) {
-  return semitonesToFrequencyRatio(normalizedPitchToSemitones(value));
+export function frequencyToNormalizedPitch(frequency) {
+  const clampedFrequency = Math.min(
+    MAX_PITCH_FREQUENCY_HZ,
+    Math.max(MIN_PITCH_FREQUENCY_HZ, Number.isFinite(frequency) ? frequency : MIN_PITCH_FREQUENCY_HZ)
+  );
+  return Math.log(clampedFrequency / MIN_PITCH_FREQUENCY_HZ)
+    / Math.log(MAX_PITCH_FREQUENCY_HZ / MIN_PITCH_FREQUENCY_HZ);
 }
 
 function clampNormalizedValue(value) {

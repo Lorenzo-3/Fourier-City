@@ -11,8 +11,9 @@ import {
   PROCEDURAL_SIGNALS
 } from './procedural-signals.js';
 import {
-  normalizedPitchToFrequencyRatio,
-  normalizedPitchToSemitones
+  frequencyToNormalizedPitch,
+  normalizedPitchToFrequency,
+  normalizedPitchToPlaybackRate
 } from './pitch-control.mjs';
 import { createWaveformDisplayBounds, mapWaveformSampleToY } from './waveform-visualization.mjs';
 
@@ -422,11 +423,37 @@ function createGeneratedSource(signal) {
   return { kind: 'procedural', signal };
 }
 
+function getPitchMode(source = currentSource) {
+  if (source.kind === 'mp3') return 'playbackRate';
+  if (source.kind === 'procedural' && source.signal.periodic) return 'frequency';
+  return 'disabled';
+}
+
+function setKnobNormalizedValue(knob, value) {
+  knob.userData.value = Math.max(0, Math.min(1, value));
+  const angleRange = 270 * Math.PI / 180;
+  knob.rotation.y = Math.PI - (knob.userData.value - 0.5) * angleRange;
+  updateKnobValueDisplay(knob);
+}
+
+function resetPitchForSource(source) {
+  if (!pitchknob) return;
+  const value = getPitchMode(source) === 'frequency'
+    ? frequencyToNormalizedPitch(FUNDAMENTAL_HZ)
+    : 0.5;
+  setKnobNormalizedValue(pitchknob, value);
+}
+
+function isKnobInteractive(knob) {
+  return knob.userData.name !== 'pitchknob' || getPitchMode() !== 'disabled';
+}
+
 function selectAudioSource(source) {
   stopCurrentPlayback();
   resetCurrentWaveform();
   waveformData = null;
   currentSource = source;
+  resetPitchForSource(source);
   sourceRequestVersion += 1;
   pendingSourceVersion = sourceRequestVersion;
   soundReady = false;
@@ -474,11 +501,10 @@ function loadAudioSource(source, requestVersion) {
 function finishLoadingPeriodicSource(source, requestVersion) {
   if (requestVersion !== sourceRequestVersion) return;
 
-  const pitchRatio = normalizedPitchToFrequencyRatio(pitchknob.userData.value);
   const oscillator = createPeriodicOscillator(
     listener.context,
     source.signal,
-    FUNDAMENTAL_HZ * pitchRatio
+    normalizedPitchToFrequency(pitchknob.userData.value)
   );
   const gain = listener.context.createGain();
   gain.gain.value = PROCEDURAL_OUTPUT_LEVEL;
@@ -496,7 +522,7 @@ function finishLoadingBufferSource(buffer, requestVersion) {
   sound.setLoop(true);
   sound.setPlaybackRate(
     currentSource.kind === 'mp3'
-      ? normalizedPitchToFrequencyRatio(pitchknob.userData.value)
+      ? normalizedPitchToPlaybackRate(pitchknob.userData.value)
       : 1
   );
   finishLoadingSource(requestVersion);
@@ -610,19 +636,22 @@ function findStableWaveformStart(samples, displayLength) {
 }
 
 function applyPitchValue(value, immediately = false) {
-  const pitchRatio = normalizedPitchToFrequencyRatio(value);
+  const pitchMode = getPitchMode();
+  if (pitchMode === 'disabled') return;
+
   const currentTime = listener.context.currentTime;
 
-  if (activePeriodicSource) {
+  if (pitchMode === 'frequency' && activePeriodicSource) {
     const frequency = activePeriodicSource.oscillator.frequency;
+    const targetFrequency = normalizedPitchToFrequency(value);
     frequency.cancelScheduledValues(currentTime);
     if (immediately) {
-      frequency.setValueAtTime(FUNDAMENTAL_HZ * pitchRatio, currentTime);
+      frequency.setValueAtTime(targetFrequency, currentTime);
     } else {
-      frequency.setTargetAtTime(FUNDAMENTAL_HZ * pitchRatio, currentTime, 0.03);
+      frequency.setTargetAtTime(targetFrequency, currentTime, 0.03);
     }
-  } else if (soundReady && currentSource.kind === 'mp3') {
-    sound.setPlaybackRate(pitchRatio);
+  } else if (pitchMode === 'playbackRate' && soundReady) {
+    sound.setPlaybackRate(normalizedPitchToPlaybackRate(value));
   }
 }
 
@@ -937,8 +966,14 @@ function updateKnobValueDisplay(knob) {
 
     let displayValue;
     if (knob.userData.name === 'pitchknob') {
-      const semitones = normalizedPitchToSemitones(knob.userData.value);
-      displayValue = `${semitones > 0 ? '+' : ''}${semitones.toFixed(1)} st`;
+      const pitchMode = getPitchMode();
+      if (pitchMode === 'playbackRate') {
+        displayValue = `${normalizedPitchToPlaybackRate(knob.userData.value).toFixed(2)}x`;
+      } else if (pitchMode === 'frequency') {
+        displayValue = `${Math.round(normalizedPitchToFrequency(knob.userData.value))}Hz`;
+      } else {
+        displayValue = 'N/A';
+      }
     } else if (knob.userData.name === 'cutoffknob') {
       const minFreq = 20;
       const maxFreq = 20000;
@@ -1190,7 +1225,7 @@ const peakingbutton = createButton(
 );
 
 // Knobs
-pitchknob = createKnobMesh(new THREE.Vector3(0.0, 1.24, 1.3), 'pitchknob', 0.5, -12, 12);
+pitchknob = createKnobMesh(new THREE.Vector3(0.0, 1.24, 1.3), 'pitchknob', 0.5, 0, 1);
 const cutoffknob = createKnobMesh(new THREE.Vector3(-0.3, 1.24, 1.05), 'cutoffknob', 0.5, 20, 20000);
 const gainknob = createKnobMesh(new THREE.Vector3(0.0, 1.24, 1.05), 'gainknob', 0.5, -18, 18);
 const resonanceknob = createKnobMesh(new THREE.Vector3(0.3, 1.24, 1.05), 'resonanceknob', 0.1, 0.1, 20);
@@ -1350,7 +1385,7 @@ window.addEventListener('mousedown', (event) => {
     mouseClick.set(0, 0);
     raycaster.setFromCamera(mouseClick, camera);
     const intersects = raycaster.intersectObjects(knobObjects);
-    if (intersects.length > 0) {
+    if (intersects.length > 0 && isKnobInteractive(intersects[0].object)) {
       activeKnob = intersects[0].object;
       isDraggingKnob = true;
       event.preventDefault();
@@ -1363,7 +1398,7 @@ window.addEventListener('mousedown', (event) => {
     mouseClick.y = -(event.clientY / window.innerHeight) * 2 + 1;
     raycaster.setFromCamera(mouseClick, camera);
     const intersects = raycaster.intersectObjects(knobObjects);
-    if (intersects.length > 0) {
+    if (intersects.length > 0 && isKnobInteractive(intersects[0].object)) {
       activeKnob = intersects[0].object;
       previousMouseY = event.clientY;
       isDraggingKnob = true;
@@ -1389,15 +1424,12 @@ document.addEventListener('pointerlockchange', () => {
 });
 
 function onPointerLockMove(event) {
-  if (activeKnob && isDraggingKnob) {
+  if (activeKnob && isDraggingKnob && isKnobInteractive(activeKnob)) {
     const deltaY = event.movementY;
     activeKnob.userData.value += deltaY * 0.01;
     activeKnob.userData.value = Math.max(0, Math.min(1, activeKnob.userData.value));
-    const angleRange = 270 * Math.PI / 180;
-    const rotationAngle = Math.PI - (activeKnob.userData.value - 0.5) * angleRange;
-    activeKnob.rotation.y = rotationAngle;
+    setKnobNormalizedValue(activeKnob, activeKnob.userData.value);
     updateFilterParameter(activeKnob.userData.name, activeKnob.userData.value);
-    updateKnobValueDisplay(activeKnob);
     updateGlobalFilterState();
     updateFrequencyResponseLine();
     event.stopPropagation();
@@ -1405,15 +1437,12 @@ function onPointerLockMove(event) {
 }
 
 window.addEventListener('mousemove', (event) => {
-  if (!controls.isLocked && activeKnob && isDraggingKnob) {
+  if (!controls.isLocked && activeKnob && isDraggingKnob && isKnobInteractive(activeKnob)) {
     const deltaY = previousMouseY - event.clientY;
     activeKnob.userData.value += deltaY * 0.005;
     activeKnob.userData.value = Math.max(0, Math.min(1, activeKnob.userData.value));
-    const angleRange = 270 * Math.PI / 180;
-    const rotationAngle = Math.PI - (activeKnob.userData.value - 0.5) * angleRange;
-    activeKnob.rotation.y = rotationAngle;
+    setKnobNormalizedValue(activeKnob, activeKnob.userData.value);
     updateFilterParameter(activeKnob.userData.name, activeKnob.userData.value);
-    updateKnobValueDisplay(activeKnob);
     updateGlobalFilterState();
     updateFrequencyResponseLine();
     previousMouseY = event.clientY;

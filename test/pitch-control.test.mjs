@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  normalizedPitchToFrequencyRatio,
-  normalizedPitchToSemitones
+  frequencyToNormalizedPitch,
+  normalizedPitchToFrequency,
+  normalizedPitchToPlaybackRate
 } from '../pitch-control.mjs';
 import {
   createPeriodicOscillator,
@@ -10,17 +11,23 @@ import {
   PROCEDURAL_SIGNALS
 } from '../procedural-signals.js';
 
-test('maps the pitch knob from one octave down to one octave up', () => {
-  assert.equal(normalizedPitchToSemitones(0), -12);
-  assert.equal(normalizedPitchToSemitones(0.5), 0);
-  assert.equal(normalizedPitchToSemitones(1), 12);
-  assert.equal(normalizedPitchToFrequencyRatio(0), 0.5);
-  assert.equal(normalizedPitchToFrequencyRatio(0.5), 1);
-  assert.equal(normalizedPitchToFrequencyRatio(1), 2);
+test('maps the music pitch knob to playback speed', () => {
+  assert.equal(normalizedPitchToPlaybackRate(0), 0.5);
+  assert.equal(normalizedPitchToPlaybackRate(0.5), 1);
+  assert.equal(normalizedPitchToPlaybackRate(1), 1.5);
+});
+
+test('maps the periodic pitch knob to a logarithmic frequency range', () => {
+  assert.equal(normalizedPitchToFrequency(0), 20);
+  assert.ok(Math.abs(normalizedPitchToFrequency(1) - 20000) < 1e-9);
+
+  const defaultPitchValue = frequencyToNormalizedPitch(FUNDAMENTAL_HZ);
+  assert.ok(Math.abs(normalizedPitchToFrequency(defaultPitchValue) - FUNDAMENTAL_HZ) < 1e-9);
 });
 
 test('creates periodic signals as oscillators at the requested frequency', () => {
   const context = createMockAudioContext();
+  const frequency = normalizedPitchToFrequency(0.5);
 
   for (const signal of [
     PROCEDURAL_SIGNALS.sine,
@@ -29,9 +36,8 @@ test('creates periodic signals as oscillators at the requested frequency', () =>
     PROCEDURAL_SIGNALS.saw,
     PROCEDURAL_SIGNALS.rich
   ]) {
-    const frequency = FUNDAMENTAL_HZ * normalizedPitchToFrequencyRatio(1);
     const oscillator = createPeriodicOscillator(context, signal, frequency);
-    assert.equal(oscillator.frequency.value, 440);
+    assert.ok(Math.abs(oscillator.frequency.value - frequency) < 1e-9);
   }
 
   assert.equal(context.oscillators[0].type, 'sine');
