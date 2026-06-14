@@ -4,6 +4,7 @@ import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
 import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { normalizedValueToSample } from './skyline-target.mjs';
 
 const CONFIG = {
     buildingCount:70,
@@ -84,6 +85,7 @@ const state = window.__fourierCityLore ?? {
     wireframeColorBuffer: null,
     wireframeMaterial: null,
     wireframeYFactors: null,
+    skylineModelHeight: 0,
     baseBuildingColors: new Float32Array(CONFIG.buildingCount * 3),
     groundFlow: null,
     groundFlowMaterial: null,
@@ -119,6 +121,10 @@ if (!state.groundFlowEnergyData || state.groundFlowEnergyData.length !== CONFIG.
 
 if (!state.baseBuildingColors || state.baseBuildingColors.length !== CONFIG.buildingCount * 3) {
     state.baseBuildingColors = new Float32Array(CONFIG.buildingCount * 3);
+}
+
+if (typeof state.skylineModelHeight !== 'number') {
+    state.skylineModelHeight = 0;
 }
 
 buildBaseBuildingColors();
@@ -218,6 +224,7 @@ function resetSkylineState() {
     state.wireframeColorBuffer = null;
     state.wireframeMaterial = null;
     state.wireframeYFactors = null;
+    state.skylineModelHeight = 0;
     state.currentScales.fill(0);
     resetEnergyCalibration();
 
@@ -574,6 +581,7 @@ function buildSkyline(geometry, wireframeGeometry) {
     state.wireframeColorBuffer = wireframeData.colorBuffer;
     state.wireframeMaterial = wireframeMaterial;
     state.wireframeYFactors = wireframeData.yFactors;
+    state.skylineModelHeight = geometry.boundingBox?.max.y ?? 0;
 
     solidInstances.name = 'AudioReactiveSkylineSolid';
     wireframeLines.name = 'AudioReactiveSkylineQuadWireframe';
@@ -691,6 +699,20 @@ export function getBandCenterFrequency(index) {
     const maxFreq = CONFIG.maxHz;
     const ratio = Math.pow(maxFreq / minFreq, 1 / (CONFIG.buildingCount - 1));
     return minFreq * Math.pow(ratio, index + 0.5);
+}
+
+export function getSkylineTargetPosition(normalizedValue, target = new THREE.Vector3()) {
+    const sample = normalizedValueToSample(normalizedValue, state.buildings.length);
+    if (!sample || !state.skylineModelHeight) return null;
+
+    const lowerBuilding = state.buildings[sample.lowerIndex];
+    const upperBuilding = state.buildings[sample.upperIndex];
+    const lowerHeight = state.currentScales[sample.lowerIndex] * state.skylineModelHeight;
+    const upperHeight = state.currentScales[sample.upperIndex] * state.skylineModelHeight;
+
+    target.copy(lowerBuilding.position).lerp(upperBuilding.position, sample.mix);
+    target.y = THREE.MathUtils.lerp(lowerHeight, upperHeight, sample.mix) + 4;
+    return target;
 }
 
 // ==========================================================================

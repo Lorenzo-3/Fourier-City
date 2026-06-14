@@ -1,0 +1,221 @@
+import * as THREE from 'three';
+import { solveTwoLinkArm } from './robot-arm-kinematics.mjs';
+
+const BASE_POSITION = new THREE.Vector3(0, 0, -6);
+const SHOULDER_HEIGHT = 9;
+const PEDESTAL_RADIUS = 1.35;
+const LINK_LENGTH = 90;
+const BASE_DAMPING = 2.8;
+const SHOULDER_DAMPING = 4.1;
+const ELBOW_DAMPING = 3.2;
+const WRIST_DAMPING = 5.5;
+const ACTIVE_COLOR = new THREE.Color(0xff33ff);
+const DISABLED_COLOR = new THREE.Color(0x512551);
+
+export function createPitchRobotArm(scene) {
+  const root = new THREE.Group();
+  root.name = 'PitchRobotArm';
+  root.position.copy(BASE_POSITION);
+
+  const baseYaw = new THREE.Group();
+  baseYaw.name = 'PitchRobotArmBaseYaw';
+  baseYaw.position.y = SHOULDER_HEIGHT;
+  root.add(baseYaw);
+
+  const shoulder = new THREE.Group();
+  shoulder.name = 'PitchRobotArmShoulder';
+  baseYaw.add(shoulder);
+
+  const elbow = new THREE.Group();
+  elbow.name = 'PitchRobotArmElbow';
+  elbow.position.z = LINK_LENGTH;
+  shoulder.add(elbow);
+
+  const wrist = new THREE.Group();
+  wrist.name = 'PitchRobotArmWrist';
+  wrist.position.z = LINK_LENGTH;
+  elbow.add(wrist);
+
+  const armMaterial = new THREE.MeshStandardMaterial({
+    color: 0xb9c7d6,
+    emissive: 0x172432,
+    roughness: 0.28,
+    metalness: 0.72
+  });
+  const jointMaterial = new THREE.MeshStandardMaterial({
+    color: 0x293746,
+    emissive: 0x09121d,
+    roughness: 0.2,
+    metalness: 0.85
+  });
+  const sliderMaterial = new THREE.MeshStandardMaterial({
+    color: ACTIVE_COLOR,
+    emissive: ACTIVE_COLOR,
+    emissiveIntensity: 1.6,
+    roughness: 0.2,
+    metalness: 0.45
+  });
+
+  const basePlate = createCylinderMesh(PEDESTAL_RADIUS, PEDESTAL_RADIUS, 0.6, jointMaterial);
+  basePlate.position.y = 0.3;
+  root.add(basePlate);
+
+  const pedestal = createCylinderMesh(0.65, 0.95, SHOULDER_HEIGHT - 0.6, armMaterial);
+  pedestal.position.y = (SHOULDER_HEIGHT + 0.6) / 2;
+  root.add(pedestal);
+
+  const rotatingBase = createCylinderMesh(1.1, 1.1, 1.1, jointMaterial);
+  rotatingBase.position.y = -0.55;
+  baseYaw.add(rotatingBase);
+
+  const shoulderJoint = createJointMesh(jointMaterial, 1.8);
+  shoulder.add(shoulderJoint);
+  const shoulderMotorRing = createMotorRing(armMaterial, 2.3);
+  shoulder.add(shoulderMotorRing);
+
+  const firstLink = createLinkMesh(armMaterial);
+  shoulder.add(firstLink);
+
+  const elbowJoint = createJointMesh(jointMaterial, 2.2);
+  elbow.add(elbowJoint);
+  const elbowMotorRing = createMotorRing(armMaterial, 2.7);
+  elbow.add(elbowMotorRing);
+
+  const secondLink = createLinkMesh(armMaterial);
+  elbow.add(secondLink);
+
+  const wristJoint = createJointMesh(jointMaterial, 1.6);
+  wrist.add(wristJoint);
+  const wristMotorRing = createMotorRing(sliderMaterial, 2);
+  wrist.add(wristMotorRing);
+
+  const sliderHead = createCylinderMesh(5, 5, 8, sliderMaterial);
+  sliderHead.name = 'PitchRobotArmSliderHead';
+  sliderHead.position.y = 0.6;
+  wrist.add(sliderHead);
+
+  scene.add(root);
+
+  const shoulderWorldPosition = new THREE.Vector3();
+  const targetOffset = new THREE.Vector3();
+  let currentYaw = 0;
+  let currentShoulder = 0;
+  let currentElbow = 0;
+  let currentWrist = 0;
+  let elapsedSeconds = 0;
+  let movementEnergy = 0;
+
+  return {
+    root,
+    collision: {
+      x: BASE_POSITION.x,
+      z: BASE_POSITION.z,
+      radius: PEDESTAL_RADIUS
+    },
+    update(target, deltaSeconds, active) {
+      if (!target) return;
+
+      elapsedSeconds += deltaSeconds;
+      shoulderWorldPosition.copy(root.position);
+      shoulderWorldPosition.y += SHOULDER_HEIGHT;
+      targetOffset.copy(target).sub(shoulderWorldPosition);
+      const targetYaw = Math.atan2(targetOffset.x, targetOffset.z);
+      const horizontalDistance = Math.hypot(targetOffset.x, targetOffset.z);
+      const solution = solveTwoLinkArm(
+        horizontalDistance,
+        -targetOffset.y,
+        LINK_LENGTH,
+        LINK_LENGTH
+      );
+      const safeDelta = Math.max(0, deltaSeconds);
+      const yawDifference = angleDifference(currentYaw, targetYaw);
+      movementEnergy = THREE.MathUtils.lerp(
+        movementEnergy,
+        Math.min(1, Math.abs(yawDifference) * 2.5),
+        1 - Math.exp(-5 * safeDelta)
+      );
+
+      currentYaw = dampAngle(currentYaw, targetYaw, dampingBlend(BASE_DAMPING, safeDelta));
+      currentShoulder = dampAngle(
+        currentShoulder,
+        solution.shoulderAngle,
+        dampingBlend(SHOULDER_DAMPING, safeDelta)
+      );
+      currentElbow = dampAngle(
+        currentElbow,
+        solution.elbowAngle,
+        dampingBlend(ELBOW_DAMPING, safeDelta)
+      );
+      currentWrist = dampAngle(
+        currentWrist,
+        -(currentShoulder + currentElbow),
+        dampingBlend(WRIST_DAMPING, safeDelta)
+      );
+
+      baseYaw.rotation.y = currentYaw;
+      shoulder.rotation.x = currentShoulder;
+      elbow.rotation.x = currentElbow;
+      wrist.rotation.x = currentWrist;
+
+      const motorSpeed = active ? 0.7 + movementEnergy * 5 : 0.18;
+      shoulderMotorRing.rotation.z += safeDelta * motorSpeed;
+      elbowMotorRing.rotation.z -= safeDelta * motorSpeed * 1.35;
+      wristMotorRing.rotation.z += safeDelta * motorSpeed * 2;
+      wrist.rotation.z = Math.sin(elapsedSeconds * 1.5) * (0.035 + movementEnergy * 0.08);
+      sliderHead.position.y = 0.6 + Math.sin(elapsedSeconds * 2.2) * 0.35;
+
+      const materialBlend = dampingBlend(4, safeDelta);
+      sliderMaterial.color.lerp(active ? ACTIVE_COLOR : DISABLED_COLOR, materialBlend);
+      sliderMaterial.emissive.copy(sliderMaterial.color);
+      sliderMaterial.emissiveIntensity = THREE.MathUtils.lerp(
+        sliderMaterial.emissiveIntensity,
+        active ? 1.6 : 0.18,
+        materialBlend
+      );
+    }
+  };
+}
+
+function createLinkMesh(material) {
+  const geometry = new THREE.BoxGeometry(1.6, 1.6, LINK_LENGTH);
+  geometry.translate(0, 0, LINK_LENGTH / 2);
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  return mesh;
+}
+
+function createJointMesh(material, radius = 7) {
+  const mesh = new THREE.Mesh(new THREE.SphereGeometry(radius, 24, 16), material);
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  return mesh;
+}
+
+function createMotorRing(material, radius) {
+  const mesh = new THREE.Mesh(new THREE.TorusGeometry(radius, 1.2, 10, 32), material);
+  mesh.castShadow = true;
+  return mesh;
+}
+
+function createCylinderMesh(topRadius, bottomRadius, height, material) {
+  const mesh = new THREE.Mesh(
+    new THREE.CylinderGeometry(topRadius, bottomRadius, height, 24),
+    material
+  );
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  return mesh;
+}
+
+function dampAngle(current, target, blend) {
+  return current + angleDifference(current, target) * blend;
+}
+
+function angleDifference(current, target) {
+  return Math.atan2(Math.sin(target - current), Math.cos(target - current));
+}
+
+function dampingBlend(damping, deltaSeconds) {
+  return 1 - Math.exp(-damping * deltaSeconds);
+}

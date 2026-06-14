@@ -2,7 +2,14 @@ import * as THREE from 'three';
 import { PointerLockControls } from 'three/examples/jsm/controls/PointerLockControls.js';
 import { EXRLoader } from 'three/examples/jsm/loaders/EXRLoader.js';
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
-import { initializeLore, updateLore, computeFilterMultipliers, getBandCenterFrequency } from './lore.js';
+import {
+  initializeLore,
+  updateLore,
+  computeFilterMultipliers,
+  getBandCenterFrequency,
+  getSkylineTargetPosition
+} from './lore.js';
+import { createPitchRobotArm } from './pitch-robot-arm.js';
 import {
   createPeriodicOscillator,
   createProceduralSignal,
@@ -16,6 +23,7 @@ import {
   normalizedPitchToPlaybackRate
 } from './pitch-control.mjs';
 import { createWaveformDisplayBounds, mapWaveformSampleToY } from './waveform-visualization.mjs';
+import { collidesWithCircle } from './player-collision.mjs';
 
 // ============================================================
 // RENDERER SETUP (Improved shading, shadows, tone mapping)
@@ -326,6 +334,8 @@ loader.load('models/table_wireframe.obj', (object) => {
 const sound = new THREE.PositionalAudio(listener);
 const audioLoader = new THREE.AudioLoader();
 initializeLore({ scene, camera, audio: sound });
+const pitchRobotArm = createPitchRobotArm(scene);
+const pitchRobotTarget = new THREE.Vector3();
 
 // Web Audio processing
 let filters = null;
@@ -1274,6 +1284,13 @@ function collidesWithTable(position) {
   return (dx * dx + dz * dz) <= (radius * radius);
 }
 
+function collidesWithObstacle(position) {
+  return (
+    collidesWithTable(position)
+    || collidesWithCircle(position, pitchRobotArm.collision, PLAYER_RADIUS)
+  );
+}
+
 function clampToWorld(position) {
   position.x = THREE.MathUtils.clamp(position.x, -WORLD_LIMIT, WORLD_LIMIT);
   position.z = THREE.MathUtils.clamp(position.z, -WORLD_LIMIT, WORLD_LIMIT);
@@ -1308,7 +1325,7 @@ function updatePlayerMovement(delta) {
   candidatePosition.y = PLAYER_EYE_HEIGHT;
   clampToWorld(candidatePosition);
 
-  if (!collidesWithTable(candidatePosition)) {
+  if (!collidesWithObstacle(candidatePosition)) {
     camera.position.copy(candidatePosition);
     return;
   }
@@ -1316,14 +1333,14 @@ function updatePlayerMovement(delta) {
   axisCandidatePosition.copy(camera.position);
   axisCandidatePosition.x = candidatePosition.x;
   clampToWorld(axisCandidatePosition);
-  if (!collidesWithTable(axisCandidatePosition)) {
+  if (!collidesWithObstacle(axisCandidatePosition)) {
     camera.position.x = axisCandidatePosition.x;
   }
 
   axisCandidatePosition.copy(camera.position);
   axisCandidatePosition.z = candidatePosition.z;
   clampToWorld(axisCandidatePosition);
-  if (!collidesWithTable(axisCandidatePosition)) {
+  if (!collidesWithObstacle(axisCandidatePosition)) {
     camera.position.z = axisCandidatePosition.z;
   }
 
@@ -1517,6 +1534,11 @@ function animate() {
   playmusic();
   clickanimation();
   updateLore();
+
+  const pitchIsActive = getPitchMode() !== 'disabled';
+  const pitchTargetValue = pitchIsActive ? pitchknob.userData.value : 0.5;
+  const skylinePitchTarget = getSkylineTargetPosition(pitchTargetValue, pitchRobotTarget);
+  pitchRobotArm.update(skylinePitchTarget, delta, pitchIsActive);
 
   // Red response line + cutoff sphere now clearly show filter effects
   updateFrequencyResponseLine();
