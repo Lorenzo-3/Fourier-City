@@ -1,10 +1,13 @@
 import * as THREE from 'three';
 import { solveTwoLinkArm } from './robot-arm-kinematics.mjs';
 
-const BASE_POSITION = new THREE.Vector3(0, 0, -6);
-const SHOULDER_HEIGHT = 9;
+const BASE_POSITION = new THREE.Vector3(0, 0, 9.5);
+const SHOULDER_HEIGHT = 5;
 const PEDESTAL_RADIUS = 1.35;
 const LINK_LENGTH = 90;
+const LINK_THICKNESS = 0.9;
+const NEEDLE_HEIGHT = 4.5;
+const NEEDLE_RADIUS = 1.4;
 const BASE_DAMPING = 2.8;
 const SHOULDER_DAMPING = 4.1;
 const ELBOW_DAMPING = 3.2;
@@ -60,39 +63,38 @@ export function createPitchRobotArm(scene) {
   basePlate.position.y = 0.3;
   root.add(basePlate);
 
-  const pedestal = createCylinderMesh(0.65, 0.95, SHOULDER_HEIGHT - 0.6, armMaterial);
+  const pedestal = createCylinderMesh(0.45, 0.8, SHOULDER_HEIGHT - 0.6, armMaterial);
   pedestal.position.y = (SHOULDER_HEIGHT + 0.6) / 2;
   root.add(pedestal);
 
-  const rotatingBase = createCylinderMesh(1.1, 1.1, 1.1, jointMaterial);
+  const rotatingBase = createCylinderMesh(0.9, 0.9, 0.9, jointMaterial);
   rotatingBase.position.y = -0.55;
   baseYaw.add(rotatingBase);
 
-  const shoulderJoint = createJointMesh(jointMaterial, 1.8);
+  const shoulderJoint = createJointMesh(jointMaterial, 0.9);
   shoulder.add(shoulderJoint);
-  const shoulderMotorRing = createMotorRing(armMaterial, 2.3);
+  const shoulderMotorRing = createMotorRing(armMaterial, 1.25);
   shoulder.add(shoulderMotorRing);
 
   const firstLink = createLinkMesh(armMaterial);
   shoulder.add(firstLink);
 
-  const elbowJoint = createJointMesh(jointMaterial, 2.2);
+  const elbowJoint = createJointMesh(jointMaterial, 1.1);
   elbow.add(elbowJoint);
-  const elbowMotorRing = createMotorRing(armMaterial, 2.7);
+  const elbowMotorRing = createMotorRing(armMaterial, 1.45);
   elbow.add(elbowMotorRing);
 
   const secondLink = createLinkMesh(armMaterial);
   elbow.add(secondLink);
 
-  const wristJoint = createJointMesh(jointMaterial, 1.6);
+  const wristJoint = createJointMesh(jointMaterial, 0.8);
   wrist.add(wristJoint);
-  const wristMotorRing = createMotorRing(sliderMaterial, 2);
+  const wristMotorRing = createMotorRing(sliderMaterial, 1.1);
   wrist.add(wristMotorRing);
 
-  const sliderHead = createCylinderMesh(5, 5, 8, sliderMaterial);
-  sliderHead.name = 'PitchRobotArmSliderHead';
-  sliderHead.position.y = 0.6;
-  wrist.add(sliderHead);
+  const needleHead = createInvertedPyramidMesh(NEEDLE_RADIUS, NEEDLE_HEIGHT, sliderMaterial);
+  needleHead.name = 'PitchRobotArmNeedleHead';
+  wrist.add(needleHead);
 
   scene.add(root);
 
@@ -162,7 +164,6 @@ export function createPitchRobotArm(scene) {
       elbowMotorRing.rotation.z -= safeDelta * motorSpeed * 1.35;
       wristMotorRing.rotation.z += safeDelta * motorSpeed * 2;
       wrist.rotation.z = Math.sin(elapsedSeconds * 1.5) * (0.035 + movementEnergy * 0.08);
-      sliderHead.position.y = 0.6 + Math.sin(elapsedSeconds * 2.2) * 0.35;
 
       const materialBlend = dampingBlend(4, safeDelta);
       sliderMaterial.color.lerp(active ? ACTIVE_COLOR : DISABLED_COLOR, materialBlend);
@@ -177,7 +178,7 @@ export function createPitchRobotArm(scene) {
 }
 
 function createLinkMesh(material) {
-  const geometry = new THREE.BoxGeometry(1.6, 1.6, LINK_LENGTH);
+  const geometry = new THREE.BoxGeometry(LINK_THICKNESS, LINK_THICKNESS, LINK_LENGTH);
   geometry.translate(0, 0, LINK_LENGTH / 2);
   const mesh = new THREE.Mesh(geometry, material);
   mesh.castShadow = true;
@@ -193,8 +194,19 @@ function createJointMesh(material, radius = 7) {
 }
 
 function createMotorRing(material, radius) {
-  const mesh = new THREE.Mesh(new THREE.TorusGeometry(radius, 1.2, 10, 32), material);
+  const mesh = new THREE.Mesh(new THREE.TorusGeometry(radius, 0.24, 10, 32), material);
   mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  return mesh;
+}
+
+function createInvertedPyramidMesh(radius, height, material) {
+  const geometry = new THREE.ConeGeometry(radius, height, 4);
+  geometry.rotateX(Math.PI);
+  geometry.translate(0, height / 2, 0);
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
   return mesh;
 }
 

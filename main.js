@@ -33,7 +33,7 @@ renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setPixelRatio(window.devicePixelRatio);
 renderer.setClearColor(0x000000);
 renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.BasicShadowMap;
+renderer.shadowMap.type = THREE.PCFShadowMap;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.0;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -142,6 +142,15 @@ dirLight.position.set(10, 20, 5);
 dirLight.castShadow = true;
 dirLight.shadow.mapSize.width = 4096;
 dirLight.shadow.mapSize.height = 4096;
+dirLight.shadow.camera.left = -170;
+dirLight.shadow.camera.right = 170;
+dirLight.shadow.camera.top = 170;
+dirLight.shadow.camera.bottom = -170;
+dirLight.shadow.camera.near = 0.5;
+dirLight.shadow.camera.far = 260;
+dirLight.shadow.bias = -0.00015;
+dirLight.shadow.normalBias = 0.03;
+dirLight.shadow.camera.updateProjectionMatrix();
 
 scene.add(dirLight);
 

@@ -47,6 +47,8 @@ const CONFIG = {
     groundVoronoiEdgeFade: 38
 };
 
+const TARGET_ROOF_CLEARANCE = 0.45;
+
 const SPECTRUM_COLOR_ANCHORS = [
     { frequency: 20, color: new THREE.Color(0x3b3bff) },   // Deep Bass
     { frequency: 40, color: new THREE.Color(0x3b7bff) },   // Low Bass
@@ -711,7 +713,7 @@ export function getSkylineTargetPosition(normalizedValue, target = new THREE.Vec
     const upperHeight = state.currentScales[sample.upperIndex] * state.skylineModelHeight;
 
     target.copy(lowerBuilding.position).lerp(upperBuilding.position, sample.mix);
-    target.y = THREE.MathUtils.lerp(lowerHeight, upperHeight, sample.mix) + 4;
+    target.y = THREE.MathUtils.lerp(lowerHeight, upperHeight, sample.mix) + TARGET_ROOF_CLEARANCE;
     return target;
 }
 
