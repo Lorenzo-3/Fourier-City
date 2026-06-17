@@ -33,13 +33,16 @@ renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setPixelRatio(window.devicePixelRatio);
 renderer.setClearColor(0x000000);
 renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFShadowMap;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.0;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.physicallyCorrectLights = true;
 
 document.body.appendChild(renderer.domElement);
+
+const SHADOW_MAP_SIZE = Math.min(8192, renderer.capabilities.maxTextureSize);
+const SHADOW_CAMERA_HALF_SIZE = 135;
 
 const PLAYER_EYE_HEIGHT = 2.3;
 const PLAYER_RADIUS = 0.35;
@@ -48,6 +51,7 @@ const SPRINT_SPEED = 7.0;
 const WORLD_LIMIT = 48;
 
 renderer.domElement.style.display = 'block';
+renderer.domElement.tabIndex = 0;
 
 const crosshair = document.createElement('div');
 crosshair.textContent = '+';
@@ -140,16 +144,16 @@ new EXRLoader().load(
 const dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
 dirLight.position.set(10, 20, 5);
 dirLight.castShadow = true;
-dirLight.shadow.mapSize.width = 4096;
-dirLight.shadow.mapSize.height = 4096;
-dirLight.shadow.camera.left = -170;
-dirLight.shadow.camera.right = 170;
-dirLight.shadow.camera.top = 170;
-dirLight.shadow.camera.bottom = -170;
+dirLight.shadow.mapSize.set(SHADOW_MAP_SIZE, SHADOW_MAP_SIZE);
+dirLight.shadow.camera.left = -SHADOW_CAMERA_HALF_SIZE;
+dirLight.shadow.camera.right = SHADOW_CAMERA_HALF_SIZE;
+dirLight.shadow.camera.top = SHADOW_CAMERA_HALF_SIZE;
+dirLight.shadow.camera.bottom = -SHADOW_CAMERA_HALF_SIZE;
 dirLight.shadow.camera.near = 0.5;
 dirLight.shadow.camera.far = 260;
 dirLight.shadow.bias = -0.00015;
 dirLight.shadow.normalBias = 0.03;
+dirLight.shadow.radius = 2.5;
 dirLight.shadow.camera.updateProjectionMatrix();
 
 scene.add(dirLight);
@@ -185,12 +189,104 @@ const playerRight = new THREE.Vector3();
 const candidatePosition = new THREE.Vector3();
 const axisCandidatePosition = new THREE.Vector3();
 let tableCollisionBox = null;
+let introPanelOpen = true;
+let introOverlay = null;
+let introStartButton = null;
 
 function lockPointer() {
+  if (introPanelOpen) return;
   if (document.pointerLockElement === renderer.domElement) return;
   const lockPromise = renderer.domElement.requestPointerLock?.();
   if (lockPromise?.catch) lockPromise.catch(() => {});
 }
+
+function createIntroPanel() {
+  introOverlay = document.createElement('div');
+  introOverlay.id = 'intro-overlay';
+  introOverlay.hidden = true;
+  introOverlay.setAttribute('role', 'dialog');
+  introOverlay.setAttribute('aria-modal', 'true');
+  introOverlay.setAttribute('aria-labelledby', 'intro-title');
+  introOverlay.setAttribute('aria-describedby', 'intro-description');
+
+  const panel = document.createElement('section');
+  panel.className = 'intro-panel';
+
+  const title = document.createElement('h1');
+  title.id = 'intro-title';
+  title.textContent = 'Fourier City';
+
+  const description = document.createElement('p');
+  description.id = 'intro-description';
+  description.textContent = 'A playable audio visualization: choose a waveform or MP3, shape it with filters and knobs, and watch the skyline react across the frequency spectrum.';
+
+  const controlsList = document.createElement('div');
+  controlsList.className = 'intro-controls';
+
+  const controlRows = [
+    ['WASD', 'Move through the city'],
+    ['Shift', 'Sprint'],
+    ['Mouse', 'Look around and aim at tabletop controls'],
+    ['Click', 'Press waveform, music, and filter buttons'],
+    ['Drag knobs', 'Adjust pitch, cutoff, gain, and resonance'],
+    ['Space', 'Stop or resume the current sound']
+  ];
+
+  for (const [shortcut, explanation] of controlRows) {
+    const row = document.createElement('div');
+    row.className = 'intro-control-row';
+
+    const key = document.createElement('kbd');
+    key.textContent = shortcut;
+
+    const text = document.createElement('span');
+    text.textContent = explanation;
+
+    row.append(key, text);
+    controlsList.appendChild(row);
+  }
+
+  introStartButton = document.createElement('button');
+  introStartButton.type = 'button';
+  introStartButton.className = 'intro-start-button';
+  introStartButton.textContent = 'Start Exploring';
+  introStartButton.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    hideIntroPanel(true);
+  });
+
+  panel.append(title, description, controlsList, introStartButton);
+  introOverlay.appendChild(panel);
+
+  for (const eventName of ['mousedown', 'mouseup', 'mousemove', 'click', 'dblclick', 'pointerdown', 'pointerup']) {
+    introOverlay.addEventListener(eventName, (event) => {
+      event.stopPropagation();
+    });
+  }
+
+  document.body.appendChild(introOverlay);
+}
+
+function showIntroPanel() {
+  introPanelOpen = true;
+  introOverlay.hidden = false;
+  if (document.pointerLockElement === renderer.domElement) {
+    controls.unlock();
+  }
+  requestAnimationFrame(() => introStartButton.focus({ preventScroll: true }));
+}
+
+function hideIntroPanel(lockAfterDismiss = false) {
+  if (!introPanelOpen) return;
+  introPanelOpen = false;
+  introOverlay.hidden = true;
+  renderer.domElement.focus({ preventScroll: true });
+  if (lockAfterDismiss) lockPointer();
+}
+
+createIntroPanel();
+showIntroPanel();
 
 // Floor (receives shadows, white with black grid)
 const floorGeometry = new THREE.PlaneGeometry(300, 300);
@@ -596,9 +692,7 @@ function ensureLiveWaveform() {
   currentWaveformMesh = new THREE.Line(
     geometry,
     new THREE.LineBasicMaterial({
-      color: 0xff0000,
-      depthTest: false,
-      depthWrite: false
+      color: 0xff0000
     })
   );
   currentWaveformMesh.renderOrder = 20;
@@ -781,9 +875,7 @@ let cutoffIndicatorSphere = null;
 function createFrequencyResponseLine() {
   const geometry = new THREE.BufferGeometry();
   const material = new THREE.LineBasicMaterial({
-    color: 0xff0000,
-    depthTest: false,
-    depthWrite: false
+    color: 0xff0000
   });
   const line = new THREE.Line(geometry, material);
   line.visible = false;
@@ -792,9 +884,7 @@ function createFrequencyResponseLine() {
   // Create the yellow sphere that marks the cutoff frequency
   const sphereGeom = new THREE.SphereGeometry(1, 16, 16);
   const sphereMat = new THREE.MeshBasicMaterial({
-    color: 0xffff00,
-    depthTest: false,
-    depthWrite: false
+    color: 0xffff00
   });
   cutoffIndicatorSphere = new THREE.Mesh(sphereGeom, sphereMat);
   cutoffIndicatorSphere.visible = false;
@@ -1407,6 +1497,8 @@ function clickanimation() {
 // EVENT LISTENERS (mouse / pointer lock)
 // ============================================================
 window.addEventListener('mousedown', (event) => {
+  if (introPanelOpen) return;
+
   if (controls.isLocked) {
     mouseClick.set(0, 0);
     raycaster.setFromCamera(mouseClick, camera);
@@ -1434,6 +1526,8 @@ window.addEventListener('mousedown', (event) => {
 });
 
 window.addEventListener('mouseup', () => {
+  if (introPanelOpen) return;
+
   if (activeKnob) {
     activeKnob = null;
     isDraggingKnob = false;
@@ -1450,6 +1544,8 @@ document.addEventListener('pointerlockchange', () => {
 });
 
 function onPointerLockMove(event) {
+  if (introPanelOpen) return;
+
   if (activeKnob && isDraggingKnob && isKnobInteractive(activeKnob)) {
     const deltaY = event.movementY;
     activeKnob.userData.value += deltaY * 0.01;
@@ -1463,6 +1559,8 @@ function onPointerLockMove(event) {
 }
 
 window.addEventListener('mousemove', (event) => {
+  if (introPanelOpen) return;
+
   if (!controls.isLocked && activeKnob && isDraggingKnob && isKnobInteractive(activeKnob)) {
     const deltaY = previousMouseY - event.clientY;
     activeKnob.userData.value += deltaY * 0.005;
@@ -1476,6 +1574,8 @@ window.addEventListener('mousemove', (event) => {
 });
 
 window.addEventListener('click', (event) => {
+  if (introPanelOpen) return;
+
   if (isDraggingKnob) {
     isDraggingKnob = false;
     if (activeKnob) {
@@ -1508,6 +1608,14 @@ window.addEventListener('click', (event) => {
 });
 
 window.addEventListener('keydown', (event) => {
+  if (introPanelOpen) {
+    if (event.code === 'Escape') {
+      hideIntroPanel(false);
+      event.preventDefault();
+    }
+    return;
+  }
+
   switch (event.code) {
     case 'KeyW': movementState.forward = true; break;
     case 'KeyS': movementState.backward = true; break;
@@ -1519,6 +1627,8 @@ window.addEventListener('keydown', (event) => {
 });
 
 window.addEventListener('keyup', (event) => {
+  if (introPanelOpen) return;
+
   switch (event.code) {
     case 'KeyW': movementState.forward = false; break;
     case 'KeyS': movementState.backward = false; break;
@@ -1544,10 +1654,13 @@ function animate() {
   clickanimation();
   updateLore();
 
-  const pitchIsActive = getPitchMode() !== 'disabled';
-  const pitchTargetValue = pitchIsActive ? pitchknob.userData.value : 0.5;
-  const skylinePitchTarget = getSkylineTargetPosition(pitchTargetValue, pitchRobotTarget);
-  pitchRobotArm.update(skylinePitchTarget, delta, pitchIsActive);
+  const pitchIsPeriodic = getPitchMode() === 'frequency';
+  if (pitchIsPeriodic) {
+    const skylinePitchTarget = getSkylineTargetPosition(pitchknob.userData.value, pitchRobotTarget);
+    pitchRobotArm.update(skylinePitchTarget, delta, true);
+  } else {
+    pitchRobotArm.update(null, delta, false);
+  }
 
   // Red response line + cutoff sphere now clearly show filter effects
   updateFrequencyResponseLine();

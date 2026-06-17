@@ -89,8 +89,6 @@ export function createPitchRobotArm(scene) {
 
   const wristJoint = createJointMesh(jointMaterial, 0.8);
   wrist.add(wristJoint);
-  const wristMotorRing = createMotorRing(sliderMaterial, 1.1);
-  wrist.add(wristMotorRing);
 
   const needleHead = createInvertedPyramidMesh(NEEDLE_RADIUS, NEEDLE_HEIGHT, sliderMaterial);
   needleHead.name = 'PitchRobotArmNeedleHead';
@@ -115,37 +113,44 @@ export function createPitchRobotArm(scene) {
       radius: PEDESTAL_RADIUS
     },
     update(target, deltaSeconds, active) {
-      if (!target) return;
-
       elapsedSeconds += deltaSeconds;
-      shoulderWorldPosition.copy(root.position);
-      shoulderWorldPosition.y += SHOULDER_HEIGHT;
-      targetOffset.copy(target).sub(shoulderWorldPosition);
-      const targetYaw = Math.atan2(targetOffset.x, targetOffset.z);
-      const horizontalDistance = Math.hypot(targetOffset.x, targetOffset.z);
-      const solution = solveTwoLinkArm(
-        horizontalDistance,
-        -targetOffset.y,
-        LINK_LENGTH,
-        LINK_LENGTH
-      );
       const safeDelta = Math.max(0, deltaSeconds);
+      let targetYaw = 0;
+      let targetShoulder = -Math.PI / 2;
+      let targetElbow = 0;
+
+      if (target && active) {
+        shoulderWorldPosition.copy(root.position);
+        shoulderWorldPosition.y += SHOULDER_HEIGHT;
+        targetOffset.copy(target).sub(shoulderWorldPosition);
+        targetYaw = Math.atan2(targetOffset.x, targetOffset.z);
+        const horizontalDistance = Math.hypot(targetOffset.x, targetOffset.z);
+        const solution = solveTwoLinkArm(
+          horizontalDistance,
+          -targetOffset.y,
+          LINK_LENGTH,
+          LINK_LENGTH
+        );
+        targetShoulder = solution.shoulderAngle;
+        targetElbow = solution.elbowAngle;
+      }
+
       const yawDifference = angleDifference(currentYaw, targetYaw);
       movementEnergy = THREE.MathUtils.lerp(
         movementEnergy,
-        Math.min(1, Math.abs(yawDifference) * 2.5),
+        active ? Math.min(1, Math.abs(yawDifference) * 2.5) : 0,
         1 - Math.exp(-5 * safeDelta)
       );
 
       currentYaw = dampAngle(currentYaw, targetYaw, dampingBlend(BASE_DAMPING, safeDelta));
       currentShoulder = dampAngle(
         currentShoulder,
-        solution.shoulderAngle,
+        targetShoulder,
         dampingBlend(SHOULDER_DAMPING, safeDelta)
       );
       currentElbow = dampAngle(
         currentElbow,
-        solution.elbowAngle,
+        targetElbow,
         dampingBlend(ELBOW_DAMPING, safeDelta)
       );
       currentWrist = dampAngle(
@@ -159,11 +164,12 @@ export function createPitchRobotArm(scene) {
       elbow.rotation.x = currentElbow;
       wrist.rotation.x = currentWrist;
 
-      const motorSpeed = active ? 0.7 + movementEnergy * 5 : 0.18;
+      const motorSpeed = active ? 0.7 + movementEnergy * 5 : 0;
       shoulderMotorRing.rotation.z += safeDelta * motorSpeed;
       elbowMotorRing.rotation.z -= safeDelta * motorSpeed * 1.35;
-      wristMotorRing.rotation.z += safeDelta * motorSpeed * 2;
-      wrist.rotation.z = Math.sin(elapsedSeconds * 1.5) * (0.035 + movementEnergy * 0.08);
+      wrist.rotation.z = active
+        ? Math.sin(elapsedSeconds * 1.5) * (0.035 + movementEnergy * 0.08)
+        : 0;
 
       const materialBlend = dampingBlend(4, safeDelta);
       sliderMaterial.color.lerp(active ? ACTIVE_COLOR : DISABLED_COLOR, materialBlend);
@@ -203,7 +209,7 @@ function createMotorRing(material, radius) {
 function createInvertedPyramidMesh(radius, height, material) {
   const geometry = new THREE.ConeGeometry(radius, height, 4);
   geometry.rotateX(Math.PI);
-  geometry.translate(0, height / 2, 0);
+  geometry.translate(0, -height / 2, 0);
   const mesh = new THREE.Mesh(geometry, material);
   mesh.castShadow = true;
   mesh.receiveShadow = true;

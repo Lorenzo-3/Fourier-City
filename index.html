@@ -4,7 +4,130 @@
     <meta charset="utf-8">
     <title>Fourier City</title>
     <style>
-      body { margin: 0; }
+      :root {
+        color-scheme: dark;
+        font-family: Arial, Helvetica, sans-serif;
+      }
+
+      body {
+        margin: 0;
+        overflow: hidden;
+      }
+
+      #intro-overlay {
+        position: fixed;
+        inset: 0;
+        z-index: 100;
+        display: grid;
+        place-items: center;
+        padding: 24px;
+        box-sizing: border-box;
+        background: rgba(2, 3, 8, 0.78);
+        color: #f7f9ff;
+      }
+
+      #intro-overlay[hidden] {
+        display: none;
+      }
+
+      .intro-panel {
+        width: min(560px, 100%);
+        max-height: min(720px, calc(100vh - 48px));
+        overflow: auto;
+        box-sizing: border-box;
+        padding: 28px;
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        border-radius: 8px;
+        background: rgba(7, 10, 18, 0.94);
+        box-shadow: 0 24px 80px rgba(0, 0, 0, 0.55);
+      }
+
+      .intro-panel h1 {
+        margin: 0 0 12px;
+        font-size: 32px;
+        line-height: 1.1;
+        letter-spacing: 0;
+      }
+
+      .intro-panel p {
+        margin: 0;
+        color: #d8deed;
+        font-size: 16px;
+        line-height: 1.5;
+      }
+
+      .intro-controls {
+        display: grid;
+        gap: 10px;
+        margin: 22px 0 26px;
+      }
+
+      .intro-control-row {
+        display: grid;
+        grid-template-columns: 112px 1fr;
+        gap: 12px;
+        align-items: center;
+        color: #d8deed;
+        font-size: 15px;
+        line-height: 1.35;
+      }
+
+      .intro-control-row kbd {
+        display: inline-block;
+        min-width: 0;
+        padding: 7px 9px;
+        border: 1px solid rgba(255, 255, 255, 0.28);
+        border-radius: 6px;
+        background: rgba(255, 255, 255, 0.1);
+        color: #ffffff;
+        font: 700 13px Arial, Helvetica, sans-serif;
+        text-align: center;
+      }
+
+      .intro-start-button {
+        width: 100%;
+        min-height: 46px;
+        border: 0;
+        border-radius: 6px;
+        background: #ffffff;
+        color: #05070b;
+        cursor: pointer;
+        font: 700 15px Arial, Helvetica, sans-serif;
+      }
+
+      .intro-start-button:focus-visible {
+        outline: 3px solid #66ff66;
+        outline-offset: 3px;
+      }
+
+      .intro-start-button:hover {
+        background: #e8eeff;
+      }
+
+      @media (max-width: 520px) {
+        #intro-overlay {
+          padding: 16px;
+          align-items: end;
+        }
+
+        .intro-panel {
+          max-height: calc(100vh - 32px);
+          padding: 22px;
+        }
+
+        .intro-panel h1 {
+          font-size: 27px;
+        }
+
+        .intro-control-row {
+          grid-template-columns: 1fr;
+          gap: 6px;
+        }
+
+        .intro-control-row kbd {
+          width: fit-content;
+        }
+      }
     </style>
   </head>
   <body>
