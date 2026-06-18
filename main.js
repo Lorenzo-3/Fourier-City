@@ -142,7 +142,7 @@ new EXRLoader().load(
 
 // Directional light (with shadows)
 const dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
-dirLight.position.set(10, 20, 5);
+dirLight.position.set(100, 200, 50);
 dirLight.castShadow = true;
 dirLight.shadow.mapSize.set(SHADOW_MAP_SIZE, SHADOW_MAP_SIZE);
 dirLight.shadow.camera.left = -SHADOW_CAMERA_HALF_SIZE;
@@ -150,7 +150,7 @@ dirLight.shadow.camera.right = SHADOW_CAMERA_HALF_SIZE;
 dirLight.shadow.camera.top = SHADOW_CAMERA_HALF_SIZE;
 dirLight.shadow.camera.bottom = -SHADOW_CAMERA_HALF_SIZE;
 dirLight.shadow.camera.near = 0.5;
-dirLight.shadow.camera.far = 260;
+dirLight.shadow.camera.far = 500;
 dirLight.shadow.bias = -0.00015;
 dirLight.shadow.normalBias = 0.03;
 dirLight.shadow.radius = 2.5;
