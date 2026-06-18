@@ -24,6 +24,7 @@ import {
 } from './pitch-control.mjs';
 import { createWaveformDisplayBounds, mapWaveformSampleToY } from './waveform-visualization.mjs';
 import { collidesWithCircle } from './player-collision.mjs';
+import { restrictShadowCastingToLight } from './shadow-caster-filter.js';
 
 // ============================================================
 // RENDERER SETUP (Improved shading, shadows, tone mapping)
@@ -142,7 +143,7 @@ new EXRLoader().load(
   }
 );
 
-// Wide shadow pass for city-scale objects and the robot arm.
+// Wide shadow pass reserved for the robotic arm.
 const dirLight = new THREE.DirectionalLight(0xffffff, 0.9);
 dirLight.position.set(100, 200, 50);
 dirLight.castShadow = true;
@@ -160,7 +161,7 @@ dirLight.shadow.camera.updateProjectionMatrix();
 
 scene.add(dirLight);
 
-// Tight shadow pass for the small tabletop controls. Keeping both lights aligned
+// Tight shadow pass for the table and its controls. Keeping both lights aligned
 // prevents doubled shadow edges while preserving the original total intensity.
 const tableDetailLight = new THREE.DirectionalLight(0xffffff, 0.3);
 tableDetailLight.position.copy(dirLight.position);
@@ -418,6 +419,7 @@ loader.load('models/table.obj', (object) => {
       child.receiveShadow = true;
     }
   });
+  restrictShadowCastingToLight(object, tableDetailLight);
 
   object.position.set(0, 0, 0);
   scene.add(object);
@@ -444,6 +446,7 @@ loader.load('models/table_wireframe.obj', (object) => {
       child.receiveShadow = true;
     }
   });
+  restrictShadowCastingToLight(object, tableDetailLight);
 
   object.position.set(0, 0, 0);
   scene.add(object);
@@ -461,6 +464,7 @@ const sound = new THREE.PositionalAudio(listener);
 const audioLoader = new THREE.AudioLoader();
 initializeLore({ scene, camera, audio: sound });
 const pitchRobotArm = createPitchRobotArm(scene);
+restrictShadowCastingToLight(pitchRobotArm.root, dirLight);
 const pitchRobotTarget = new THREE.Vector3();
 
 // Web Audio processing
@@ -1146,6 +1150,7 @@ function createKnobMesh(position, name, initialValue, minValue, maxValue) {
   knob.position.copy(position);
   knob.castShadow = true;
   knob.receiveShadow = true;
+  restrictShadowCastingToLight(knob, tableDetailLight);
 
   knob.userData.type = 'knob';
   knob.userData.name = name;
@@ -1225,6 +1230,7 @@ function createButton(position, name, color, text, isBand = false, source = null
   button.position.copy(position);
   button.castShadow = true;
   button.receiveShadow = true;
+  restrictShadowCastingToLight(button, tableDetailLight);
   button.userData.type = 'clickable';
   button.userData.name = name;
   button.userData.clicked = false;
