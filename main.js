@@ -43,9 +43,8 @@ renderer.physicallyCorrectLights = true;
 document.body.appendChild(renderer.domElement);
 
 const SHADOW_MAP_SIZE = Math.min(8192, renderer.capabilities.maxTextureSize);
-const SHADOW_CAMERA_HALF_SIZE = 135;
-const TABLE_SHADOW_MAP_SIZE = Math.min(2048, renderer.capabilities.maxTextureSize);
-const TABLE_SHADOW_CAMERA_HALF_SIZE = 4;
+const SHADOW_CAMERA_HALF_SIZE = 90; 
+const TABLE_SHADOW_MAP_SIZE = Math.min(8192, renderer.capabilities.maxTextureSize);
 
 const PLAYER_EYE_HEIGHT = 2.3;
 const PLAYER_RADIUS = 0.35;
@@ -152,30 +151,16 @@ dirLight.shadow.camera.left = -SHADOW_CAMERA_HALF_SIZE;
 dirLight.shadow.camera.right = SHADOW_CAMERA_HALF_SIZE;
 dirLight.shadow.camera.top = SHADOW_CAMERA_HALF_SIZE;
 dirLight.shadow.camera.bottom = -SHADOW_CAMERA_HALF_SIZE;
-dirLight.shadow.camera.near = 0.5;
-dirLight.shadow.camera.far = 500;
-dirLight.shadow.bias = -0.00015;
-dirLight.shadow.normalBias = 0.03;
-dirLight.shadow.radius = 2.5;
 dirLight.shadow.camera.updateProjectionMatrix();
 
 scene.add(dirLight);
 
 // Tight shadow pass for the table and its controls. Keeping both lights aligned
 // prevents doubled shadow edges while preserving the original total intensity.
-const tableDetailLight = new THREE.DirectionalLight(0xffffff, 0.3);
-tableDetailLight.position.copy(dirLight.position);
+const tableDetailLight = new THREE.DirectionalLight(0xffffff, 0.9);
+tableDetailLight.position.set(25, 50, 12.5);
 tableDetailLight.castShadow = true;
 tableDetailLight.shadow.mapSize.set(TABLE_SHADOW_MAP_SIZE, TABLE_SHADOW_MAP_SIZE);
-tableDetailLight.shadow.camera.left = -TABLE_SHADOW_CAMERA_HALF_SIZE;
-tableDetailLight.shadow.camera.right = TABLE_SHADOW_CAMERA_HALF_SIZE;
-tableDetailLight.shadow.camera.top = TABLE_SHADOW_CAMERA_HALF_SIZE;
-tableDetailLight.shadow.camera.bottom = -TABLE_SHADOW_CAMERA_HALF_SIZE;
-tableDetailLight.shadow.camera.near = 0.5;
-tableDetailLight.shadow.camera.far = 500;
-tableDetailLight.shadow.bias = -0.00005;
-tableDetailLight.shadow.normalBias = 0.005;
-tableDetailLight.shadow.radius = 1.5;
 tableDetailLight.shadow.camera.updateProjectionMatrix();
 
 scene.add(tableDetailLight);
