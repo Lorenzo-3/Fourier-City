@@ -4,7 +4,7 @@ import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
 import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { normalizedValueToSample } from './skyline-target.mjs';
+import { normalizedValueToIndex } from './skyline-target.mjs';
 
 const CONFIG = {
     buildingCount:70,
@@ -46,8 +46,6 @@ const CONFIG = {
     groundVoronoiSpecularSharpness: 38,
     groundVoronoiEdgeFade: 38
 };
-
-const TARGET_ROOF_CLEARANCE = 0.45;
 
 const SPECTRUM_COLOR_ANCHORS = [
     { frequency: 20, color: new THREE.Color(0x3b3bff) },   // Deep Bass
@@ -704,16 +702,11 @@ export function getBandCenterFrequency(index) {
 }
 
 export function getSkylineTargetPosition(normalizedValue, target = new THREE.Vector3()) {
-    const sample = normalizedValueToSample(normalizedValue, state.buildings.length);
-    if (!sample || !state.skylineModelHeight) return null;
+    const buildingIndex = normalizedValueToIndex(normalizedValue, state.buildings.length);
+    if (buildingIndex === null || !state.skylineModelHeight) return null;
 
-    const lowerBuilding = state.buildings[sample.lowerIndex];
-    const upperBuilding = state.buildings[sample.upperIndex];
-    const lowerHeight = state.currentScales[sample.lowerIndex] * state.skylineModelHeight;
-    const upperHeight = state.currentScales[sample.upperIndex] * state.skylineModelHeight;
-
-    target.copy(lowerBuilding.position).lerp(upperBuilding.position, sample.mix);
-    target.y = THREE.MathUtils.lerp(lowerHeight, upperHeight, sample.mix) + TARGET_ROOF_CLEARANCE;
+    target.copy(state.buildings[buildingIndex].position);
+    target.y = state.currentScales[buildingIndex] * state.skylineModelHeight;
     return target;
 }
 

@@ -102,7 +102,6 @@ export function createPitchRobotArm(scene) {
   let currentShoulder = 0;
   let currentElbow = 0;
   let currentWrist = 0;
-  let elapsedSeconds = 0;
   let movementEnergy = 0;
 
   return {
@@ -113,16 +112,17 @@ export function createPitchRobotArm(scene) {
       radius: PEDESTAL_RADIUS
     },
     update(target, deltaSeconds, active) {
-      elapsedSeconds += deltaSeconds;
       const safeDelta = Math.max(0, deltaSeconds);
+      const isTracking = Boolean(target && active);
       let targetYaw = 0;
       let targetShoulder = -Math.PI / 2;
       let targetElbow = 0;
 
-      if (target && active) {
+      if (isTracking) {
         shoulderWorldPosition.copy(root.position);
         shoulderWorldPosition.y += SHOULDER_HEIGHT;
         targetOffset.copy(target).sub(shoulderWorldPosition);
+        targetOffset.y += NEEDLE_HEIGHT;
         targetYaw = Math.atan2(targetOffset.x, targetOffset.z);
         const horizontalDistance = Math.hypot(targetOffset.x, targetOffset.z);
         const solution = solveTwoLinkArm(
@@ -138,45 +138,50 @@ export function createPitchRobotArm(scene) {
       const yawDifference = angleDifference(currentYaw, targetYaw);
       movementEnergy = THREE.MathUtils.lerp(
         movementEnergy,
-        active ? Math.min(1, Math.abs(yawDifference) * 2.5) : 0,
+        isTracking ? Math.min(1, Math.abs(yawDifference) * 2.5) : 0,
         1 - Math.exp(-5 * safeDelta)
       );
 
-      currentYaw = dampAngle(currentYaw, targetYaw, dampingBlend(BASE_DAMPING, safeDelta));
-      currentShoulder = dampAngle(
-        currentShoulder,
-        targetShoulder,
-        dampingBlend(SHOULDER_DAMPING, safeDelta)
-      );
-      currentElbow = dampAngle(
-        currentElbow,
-        targetElbow,
-        dampingBlend(ELBOW_DAMPING, safeDelta)
-      );
-      currentWrist = dampAngle(
-        currentWrist,
-        -(currentShoulder + currentElbow),
-        dampingBlend(WRIST_DAMPING, safeDelta)
-      );
+      if (isTracking) {
+        currentYaw = targetYaw;
+        currentShoulder = targetShoulder;
+        currentElbow = targetElbow;
+        currentWrist = -(currentShoulder + currentElbow);
+      } else {
+        currentYaw = dampAngle(currentYaw, targetYaw, dampingBlend(BASE_DAMPING, safeDelta));
+        currentShoulder = dampAngle(
+          currentShoulder,
+          targetShoulder,
+          dampingBlend(SHOULDER_DAMPING, safeDelta)
+        );
+        currentElbow = dampAngle(
+          currentElbow,
+          targetElbow,
+          dampingBlend(ELBOW_DAMPING, safeDelta)
+        );
+        currentWrist = dampAngle(
+          currentWrist,
+          -(currentShoulder + currentElbow),
+          dampingBlend(WRIST_DAMPING, safeDelta)
+        );
+      }
 
       baseYaw.rotation.y = currentYaw;
       shoulder.rotation.x = currentShoulder;
       elbow.rotation.x = currentElbow;
       wrist.rotation.x = currentWrist;
 
-      const motorSpeed = active ? 0.7 + movementEnergy * 5 : 0;
+      const motorSpeed = isTracking ? 0.7 + movementEnergy * 5 : 0;
       shoulderMotorRing.rotation.z += safeDelta * motorSpeed;
       elbowMotorRing.rotation.z -= safeDelta * motorSpeed * 1.35;
-      wrist.rotation.z = active
-        ? Math.sin(elapsedSeconds * 1.5) * (0.035 + movementEnergy * 0.08)
-        : 0;
+      wrist.rotation.z = 0;
 
       const materialBlend = dampingBlend(4, safeDelta);
-      sliderMaterial.color.lerp(active ? ACTIVE_COLOR : DISABLED_COLOR, materialBlend);
+      sliderMaterial.color.lerp(isTracking ? ACTIVE_COLOR : DISABLED_COLOR, materialBlend);
       sliderMaterial.emissive.copy(sliderMaterial.color);
       sliderMaterial.emissiveIntensity = THREE.MathUtils.lerp(
         sliderMaterial.emissiveIntensity,
-        active ? 1.6 : 0.18,
+        isTracking ? 1.6 : 0.18,
         materialBlend
       );
     }

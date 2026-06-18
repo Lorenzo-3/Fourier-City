@@ -14,6 +14,14 @@ export function normalizedValueToSample(value, itemCount) {
   };
 }
 
+export function normalizedValueToIndex(value, itemCount) {
+  if (!Number.isInteger(itemCount) || itemCount < 1) {
+    return null;
+  }
+
+  return Math.round(clampNormalizedValue(value) * (itemCount - 1));
+}
+
 function clampNormalizedValue(value) {
   return Math.min(1, Math.max(0, Number.isFinite(value) ? value : 0.5));
 }
