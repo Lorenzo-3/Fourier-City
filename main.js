@@ -43,6 +43,8 @@ document.body.appendChild(renderer.domElement);
 
 const SHADOW_MAP_SIZE = Math.min(8192, renderer.capabilities.maxTextureSize);
 const SHADOW_CAMERA_HALF_SIZE = 135;
+const TABLE_SHADOW_MAP_SIZE = Math.min(2048, renderer.capabilities.maxTextureSize);
+const TABLE_SHADOW_CAMERA_HALF_SIZE = 4;
 
 const PLAYER_EYE_HEIGHT = 2.3;
 const PLAYER_RADIUS = 0.35;
@@ -140,8 +142,8 @@ new EXRLoader().load(
   }
 );
 
-// Directional light (with shadows)
-const dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
+// Wide shadow pass for city-scale objects and the robot arm.
+const dirLight = new THREE.DirectionalLight(0xffffff, 0.9);
 dirLight.position.set(100, 200, 50);
 dirLight.castShadow = true;
 dirLight.shadow.mapSize.set(SHADOW_MAP_SIZE, SHADOW_MAP_SIZE);
@@ -157,6 +159,25 @@ dirLight.shadow.radius = 2.5;
 dirLight.shadow.camera.updateProjectionMatrix();
 
 scene.add(dirLight);
+
+// Tight shadow pass for the small tabletop controls. Keeping both lights aligned
+// prevents doubled shadow edges while preserving the original total intensity.
+const tableDetailLight = new THREE.DirectionalLight(0xffffff, 0.3);
+tableDetailLight.position.copy(dirLight.position);
+tableDetailLight.castShadow = true;
+tableDetailLight.shadow.mapSize.set(TABLE_SHADOW_MAP_SIZE, TABLE_SHADOW_MAP_SIZE);
+tableDetailLight.shadow.camera.left = -TABLE_SHADOW_CAMERA_HALF_SIZE;
+tableDetailLight.shadow.camera.right = TABLE_SHADOW_CAMERA_HALF_SIZE;
+tableDetailLight.shadow.camera.top = TABLE_SHADOW_CAMERA_HALF_SIZE;
+tableDetailLight.shadow.camera.bottom = -TABLE_SHADOW_CAMERA_HALF_SIZE;
+tableDetailLight.shadow.camera.near = 0.5;
+tableDetailLight.shadow.camera.far = 500;
+tableDetailLight.shadow.bias = -0.00005;
+tableDetailLight.shadow.normalBias = 0.005;
+tableDetailLight.shadow.radius = 1.5;
+tableDetailLight.shadow.camera.updateProjectionMatrix();
+
+scene.add(tableDetailLight);
 
 // Camera and listener
 const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
