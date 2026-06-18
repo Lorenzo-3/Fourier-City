@@ -545,7 +545,7 @@ function applyActiveFilterParameters() {
   }
 }
 
-const LIVE_WAVEFORM_POINTS = 512;
+const LIVE_WAVEFORM_POINTS = 2048;
 let waveformData = null;
 let currentSource = createMp3Source('sounds/ijustthrewouthelovefmydreams.mp3');
 let sourceRequestVersion = 1;
